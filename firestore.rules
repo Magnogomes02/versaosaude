@@ -1,0 +1,66 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() { return request.auth != null; }
+    function isGestor() {
+      return isSignedIn()
+        && exists(/databases/$(database)/documents/user_roles/$(request.auth.uid))
+        && get(/databases/$(database)/documents/user_roles/$(request.auth.uid)).data.role == 'gestor';
+    }
+
+    // Preferências globais (compat: mantemos 'preferences/system')
+    match /preferences/{docId} {
+      allow read: if isSignedIn();
+      allow write: if isGestor();
+    }
+
+    // Catálogos básicos
+    match /rooms/{docId} {
+      allow read: if isSignedIn();
+      allow write: if isGestor();
+    }
+    match /professionals/{docId} {
+      allow read: if isSignedIn();
+      allow write: if isGestor();
+    }
+
+    // Contratos e reservas
+    match /contracts/{docId} {
+      allow read: if isSignedIn();
+      allow write: if isGestor();
+    }
+    match /bookings/{docId} {
+      allow read: if isSignedIn();
+      allow write: if isGestor();
+    }
+
+    // Modelos e aprovações (caso já existam)
+    match /modelos/{docId} {
+      allow read: if isSignedIn();
+      allow write: if isGestor();
+    }
+    match /aprovacoes/{docId} {
+      allow read: if isSignedIn();
+      allow write: if isGestor();
+    }
+
+    // Logs de auditoria
+    match /audit_logs/{docId} {
+      allow create: if isSignedIn();
+      allow read: if isGestor();
+      allow update, delete: if false;
+    }
+
+    // Roles: leitura apenas do próprio doc
+    match /user_roles/{uid} {
+      allow read: if isSignedIn() && request.auth.uid == uid;
+      allow write: if false;
+    }
+
+    // Bloqueio padrão
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="pt-br">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Conflitos • Versão Saúde</title>
+  <link rel="stylesheet" href="assets/css/main.css">
+  <link rel="icon" href="assets/img/favicon.png">
+</head>
+<body class="vs-body">
+  <a class="skip-link" href="#conteudo">Pular para o conteúdo</a>
+
+  <header class="vs-header">
+    <div class="container">
+      <a href="./index.html" class="brand">
+          <img src="./assets/img/icon.png" alt="" class="logo" aria-hidden="true">
+          <span class="brand-name">Versão Saúde</span>
+      </a>
+
+      <nav class="vs-nav" aria-label="Principal">
+        <a href="./calendario.html">Calendário</a>
+        <a href="./preferencias.html">Preferências</a>
+      </nav>
+      <div class="actions"><button id="btnLogout" class="btn btn-ghost">Sair</button></div>
+    </div>
+  </header>
+
+  <main id="conteudo" class="vs-main">
+    <div class="container">
+      <section class="card" aria-labelledby="h1">
+        <h1 id="h1" class="h1">Conflitos abertos</h1>
+
+        <div class="status-row">
+          <span class="badge">Status</span>
+          <span id="status" class="status">Carregando…</span>
+        </div>
+
+        <div class="table">
+          <div class="t-head">
+            <div>ID</div><div>Data/Hora</div><div>Sala</div><div>Profissionais</div><div>Ações</div>
+          </div>
+          <div id="rows" class="t-body"></div>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <footer class="vs-footer">
+    <div class="container"><small>© <span id="y"></span> Versão Saúde</small></div>
+  </footer>
+    <script type="module">
+    import { requireAuth, bindAuthUI } from './js/app.auth.js';
+    await requireAuth();        // redireciona para login se não autenticado
+    bindAuthUI();               // mostra/esconde botões Entrar/Sair
+  </script>
+  <script type="module" src="js/app.config.js"></script>
+  <script type="module" src="js/app.auth.js"></script>
+  <script type="module" src="js/pages/conflitos.js"></script>
+</body>
+</html>

@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="pt-br">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Calendário • Versão Saúde</title>
+  <link rel="stylesheet" href="assets/css/main.css">
+  <link rel="icon" href="./assets/img/favicon.png">
+</head>
+<body class="vs-body">
+  <a class="skip-link" href="#conteudo">Pular para o conteúdo</a>
+
+  <!-- HEADER -->
+  <header class="vs-header">
+    <div class="container">
+      <a href="./index.html" class="brand">
+          <img src="./assets/img/icon.png" alt="" class="logo" aria-hidden="true">
+          <span class="brand-name">Versão Saúde</span>
+      </a>
+
+      <nav class="vs-nav" aria-label="Principal">
+        <a href="./calendario.html">Calendário</a>
+        <a href="./preferencias.html">Preferências</a>
+      </nav>
+
+      <div class="actions">
+        <button class="btn btn-ghost" data-logout id="btnLogout">Sair</button>
+      </div>
+    </div>
+  </header>
+
+  <!-- MAIN -->
+  <main id="conteudo" class="vs-main">
+    <div class="container">
+      <section class="card" aria-labelledby="h1">
+        <h1 id="h1" class="h1">Calendário semanal por sala</h1>
+
+        <!-- Toolbar com os IDs esperados pelo JS -->
+        <div class="toolbar">
+          <label>Semana:
+            <input id="week-start" type="date">
+          </label>
+
+          <label>Sala:
+            <select id="filter-room">
+              <!-- opcional: deixe em branco para listar todas -->
+            </select>
+          </label>
+
+          <label>Profissional:
+            <select id="filter-professional">
+              <!-- opcional: se não usar, pode remover este bloco -->
+            </select>
+          </label>
+
+          <div class="toolbar-actions">
+            <button id="week-prev"  class="btn" aria-label="Semana anterior">◀</button>
+            <button id="week-today" class="btn">Hoje</button>
+            <button id="week-next"  class="btn" aria-label="Próxima semana">▶</button>
+          </div>
+        </div>
+
+        <!-- Container que a grid usa -->
+        <div id="calendar-grid" class="grid-wrapper"></div>
+
+        <!-- Legenda -->
+        <div class="legend">
+          <span class="dot sel"></span> Reservado
+          <span class="dot conflict"></span> Conflito sinalizado
+        </div>
+
+        <!-- Status -->
+        <div class="status-row">
+          <span class="badge">Status</span>
+          <span id="calendar-msg" class="status">Carregando…</span>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <!-- FOOTER -->
+  <footer class="vs-footer">
+    <div class="container">
+      <small>© <span id="y"></span> Versão Saúde</small>
+    </div>
+  </footer>
+
+  <!-- JS -->
+  <!-- 1) Só liga header/login visual; o requireAuth é chamado dentro do calendario.js -->
+  <script type="module">
+    import { bindAuthUI } from './js/app.auth.js';
+    bindAuthUI();
+  </script>
+
+  <!-- 2) A página se auto-importa o resto (app.auth/app.firebase/calendar-grid) -->
+  <script type="module" src="js/pages/calendario.js"></script>
+</body>
+</html>

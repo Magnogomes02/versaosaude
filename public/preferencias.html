@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="pt-br">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Preferências • Versão Saúde</title>
+  <link rel="stylesheet" href="./assets/css/main.css">
+  <link rel="icon" href="./assets/img/favicon.png">
+</head>
+<body class="vs-body">
+  <a class="skip-link" href="#conteudo">Pular para o conteúdo</a>
+
+  <!-- HEADER -->
+  <header class="vs-header">
+    <div class="container">
+      <div class="brand">
+        <img src="./assets/img/favicon.png" alt="" class="logo" aria-hidden="true">
+        <span class="brand-name">Versão Saúde</span>
+      </div>
+
+      <nav class="vs-nav" aria-label="Principal">
+        <a href="./index.html">Início</a>
+        <a href="./calendario.html">Calendário</a>
+        <a href="./preferencias.html" aria-current="page">Preferências</a>
+      </nav>
+
+      <div class="actions">
+        <!-- adicionar data-logout para o bindAuthUI encontrar -->
+        <button id="btnLogout" data-logout class="btn btn-ghost">Sair</button>
+      </div>
+    </div>
+  </header>
+
+  <!-- MAIN -->
+  <main id="conteudo" class="vs-main">
+    <div class="container">
+      <section class="card" aria-labelledby="pref-title">
+        <h1 id="pref-title" class="h1">Preferências do Sistema</h1>
+        <p class="text-muted">Defina fuso horário, janela de agenda, horário comercial e canais de notificação.</p>
+
+        <form id="formPrefs" class="grid" novalidate>
+          <!-- Fuso / Janela -->
+          <div>
+            <label for="tz">Fuso horário</label><br>
+            <select id="tz" name="timezone" required>
+              <option value="America/Sao_Paulo">America/Sao_Paulo (BR)</option>
+              <option value="America/Recife">America/Recife (BR)</option>
+              <option value="America/Manaus">America/Manaus (BR)</option>
+              <option value="UTC">UTC</option>
+            </select>
+          </div>
+
+          <div>
+            <label for="expandDays">Janela de expansão (dias)</label><br>
+            <input id="expandDays" name="bookingWindowDays" type="number" min="7" max="120" step="1" required>
+          </div>
+
+          <!-- Horário comercial -->
+          <div>
+            <label for="bizStart">Horário comercial</label><br>
+            <input id="bizStart" type="time" required aria-label="Início">
+            —
+            <input id="bizEnd" type="time" required aria-label="Fim">
+          </div>
+
+          <!-- DST -->
+          <div>
+            <label>
+              <input id="dst" type="checkbox">
+              Ativar horário de verão manualmente
+            </label>
+          </div>
+
+          <!-- Notificações -->
+          <fieldset>
+            <legend>Notificações</legend>
+            <label><input id="notifEmail" type="checkbox"> E-mail</label><br>
+            <label><input id="notifTelegram" type="checkbox"> Telegram</label>
+          </fieldset>
+
+          <!-- Status -->
+          <div class="status-row">
+            <span class="badge">Status</span>
+            <span id="status" class="status">Carregando…</span>
+          </div>
+
+          <!-- Ações -->
+          <div class="actions">
+            <button class="btn btn-primary" id="btnSave" type="submit">Salvar</button>
+            <button class="btn" id="btnExpandWindow" type="button" title="Atualizar agenda dos próximos 60 dias">
+              Atualizar agenda 60 dias
+            </button>
+          </div>
+        </form>
+      </section>
+    </div>
+  </main>
+
+  <!-- FOOTER -->
+  <footer class="vs-footer">
+    <div class="container">
+      <small>© <span id="y"></span> Versão Saúde • <a href="privacidade.html">Política de Privacidade</a></small>
+    </div>
+  </footer>
+
+  <!-- JS (somente um módulo; ele já importa o resto e faz requireAuth/bindAuthUI) -->
+  <script type="module" src="js/pages/preferencias.js"></script>
+</body>
+</html>

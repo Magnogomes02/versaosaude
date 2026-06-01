@@ -1,0 +1,21 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "professionals",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "active", "order": "ASCENDING" },
+        { "fieldPath": "name",   "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "bookings",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "roomId", "order": "ASCENDING" },
+        { "fieldPath": "startAt",  "order": "ASCENDING" }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}

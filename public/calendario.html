@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="pt-br">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Calendário • Versão Saúde</title>
+  <link rel="stylesheet" href="assets/css/main.css">
+  <link rel="icon" href="./assets/img/favicon.png">
+</head>
+<body class="vs-body">
+  <a class="skip-link" href="#conteudo">Pular para o conteúdo</a>
+
+  <!-- HEADER -->
+  <header class="vs-header">
+    <div class="container">
+      <a href="./index.html" class="brand">
+          <img src="./assets/img/icon.png" alt="" class="logo" aria-hidden="true">
+          <span class="brand-name">Versão Saúde</span>
+      </a>
+
+      <nav class="vs-nav" aria-label="Principal">
+        <a href="./calendario.html">Calendário</a>
+        <a href="./preferencias.html">Preferências</a>
+      </nav>
+
+      <div class="actions">
+        <button class="btn btn-ghost" data-logout id="btnLogout">Sair</button>
+      </div>
+    </div>
+  </header>
+
+  <!-- MAIN -->
+  <main id="conteudo" class="vs-main">
+    <header class="page-head">
+      <h1 id="h1" class="h1">Calendário</h1>
+    </header>
+
+    <section class="vs-card actions" aria-label="Filtros e navegação do calendário">
+      <div class="actions__row">
+        <div class="field">
+          <label for="filter-room">Sala</label>
+          <select id="filter-room">
+            <option value="">(todas)</option>
+          </select>
+        </div>
+
+        <div class="field">
+          <label for="filter-professional">Profissional</label>
+          <select id="filter-professional">
+            <option value="">(todos)</option>
+          </select>
+        </div>
+
+        <div class="field">
+          <label for="week-start">Data base</label>
+          <input type="date" id="week-start" />
+        </div>
+
+        <div class="btns">
+          <button id="week-prev" class="btn" title="Anterior">◀</button>
+          <button id="week-today" class="btn">Hoje</button>
+          <button id="week-next" class="btn" title="Próximo">▶</button>
+        </div>
+
+        <!-- NOVO: seletor de visão, sem quebrar nada existente -->
+        <fieldset class="field toggle-view" role="radiogroup" aria-label="Visão">
+          <input type="radio" name="view-mode" id="view-day" value="day" checked />
+          <label for="view-day">Dia</label>
+          <input type="radio" name="view-mode" id="view-week" value="week" />
+          <label for="view-week">Semana</label>
+        </fieldset>
+      </div>
+    </section>
+
+    <p id="calendar-msg" class="muted" aria-live="polite"></p>
+
+    <!-- Contêiner único; JS alterna entre “grade semanal” existente e “board diário” novo -->
+    <section id="calendar-grid" class="vs-card calendar-shell" aria-label="Calendário"></section>
+  </main>
+
+  <!-- FOOTER -->
+  <footer class="vs-footer">
+    <div class="container">
+      <small>© <span id="y"></span> Versão Saúde</small>
+    </div>
+  </footer>
+
+  <!-- JS -->
+  <!-- 1) Só liga header/login visual; o requireAuth é chamado dentro do calendario.js -->
+  <script type="module">
+    import { bindAuthUI } from './js/app.auth.js';
+    bindAuthUI();
+  </script>
+
+  <!-- 2) A página se auto-importa o resto (app.auth/app.firebase/calendar-grid) -->
+  <script type="module" src="js/pages/calendario.js"></script>
+</body>
+</html>

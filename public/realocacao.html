@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>Realocação | Versão Saúde</title>
+        <link rel="stylesheet" href="./assets/css/main.css">
+        <link rel="icon" href="./assets/img/icon.png">
+    </head>
+    <body class="vs-body">
+        <!-- Header no padrão -->
+        <header class="vs-header">
+            <div class="container">
+                <a href="./index.html" class="brand">
+                    <img src="./assets/img/icon.png" alt="" class="logo" aria-hidden="true">
+                    <span class="brand-name">Versão Saúde</span>
+                </a>
+
+                <nav class="vs-nav">
+                    <a href="./calendario.html">Calendário</a>
+                    <a href="./preferencias.html">Preferências</a>
+                </nav>
+
+                <div class="actions">
+                    <button id="btnSignOut" class="btn btn-ghost">Sair</button>
+                </div>
+            </div>
+        </header>
+
+        <!-- Main no padrão -->
+        <main class="vs-main">
+            <div class="container">
+                <section class="card rlc-wrapper">
+                <h1 class="h1">Realocação de reservas</h1>
+
+                <!-- Toolbar (IDs preservados) -->
+                <div class="toolbar rlc-toolbar">
+                    <label>Semana:
+                    <input type="date" id="week-start" />
+                    </label>
+
+                    <div class="toolbar-actions">
+                    <button id="week-prev" class="btn" title="Semana anterior">◀</button>
+                    <button id="week-today" class="btn">Hoje</button>
+                    <button id="week-next" class="btn" title="Próxima semana">▶</button>
+                    </div>
+
+                    <span class="spacer"></span>
+
+                    <label>Sala:
+                    <select id="filter-room"></select>
+                    </label>
+                    <label>Profissional:
+                    <select id="filter-professional"></select>
+                    </label>
+                </div>
+
+                <!-- Layout em 2 colunas -->
+                <div class="rlc-layout rlc-layout--stack">
+                    <!-- Coluna esquerda: listagem -->
+                    <div class="rlc-left">
+                    <h2 class="rlc-subtitle">1 • Selecione a reserva</h2>
+
+                    <div id="list-msg" class="text-muted rlc-empty"></div>
+
+                        <div class="rlc-tablewrap">
+                            <table class="rlc-table rlc-table--stack" id="tbl-bookings" aria-describedby="list-msg">
+                                <colgroup>
+                                    <col class="col-radio"><!-- seleção -->
+                                    <col class="col-date">
+                                    <col class="col-time">
+                                    <col class="col-room">
+                                    <col class="col-prof">
+                                    <col class="col-status">
+                                </colgroup>
+                                <thead>
+                                    <tr>
+                                    <th scope="col" aria-label="Selecionar"></th>
+                                    <th scope="col">Data</th>
+                                    <th scope="col">Horário</th>
+                                    <th scope="col">Sala</th>
+                                    <th scope="col">Profissional</th>
+                                    <th scope="col">Status</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="tbody-bookings"></tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <!-- Coluna direita: destino (painel “gruda” ao rolar) -->
+                    <aside class="rlc-right">
+                        <h2 class="rlc-subtitle">2 • Defina o destino</h2>
+
+                        <form id="form-realloc" class="rlc-form" novalidate>
+                            <fieldset class="rlc-fieldset">
+                                <legend>Reserva selecionada</legend>
+                                    <div class="rlc-fields">
+                                        <label>ID <input id="sel-id" type="text" readonly></label>
+                                        <label>Contrato <input id="sel-contract" type="text" readonly></label>
+                                        <label>Profissional <input id="sel-prof" type="text" readonly></label>
+                                        <label>Sala atual <input id="sel-room" type="text" readonly></label>
+                                        <label>Início <input id="sel-start" type="text" readonly></label>
+                                        <label>Fim <input id="sel-end" type="text" readonly></label>
+                                    </div>
+                                </fieldset>
+                            <fieldset class="rlc-fieldset">
+                            <legend>Novo destino</legend>
+                            <div class="rlc-fields">
+                                <label>Nova sala
+                                <select id="dest-room"></select>
+                                </label>
+                                <label>Data
+                                <input type="date" id="dest-date">
+                                </label>
+                                <label>Início
+                                <input type="time" id="dest-start" step="1800">
+                                </label>
+                                <label>Fim
+                                <input type="time" id="dest-end" step="1800">
+                                </label>
+                                <label>Motivo (auditoria)
+                                <input type="text" id="reason" placeholder="Ex.: manutenção da sala, ajuste operacional">
+                                </label>
+                            </div>
+                            </fieldset>
+
+                            <div class="rlc-actions">
+                            <button id="btnCheck" class="btn" type="button">Checar conflito</button>
+                            <button id="btnReallocate" class="btn btn-primary" type="submit" disabled>Realocar</button>
+                            <span id="status" class="rlc-status" aria-live="polite"></span>
+                            </div>
+
+                            <div id="conflicts" class="rlc-conflicts text-muted" aria-live="polite"></div>
+                        </form>
+                    </aside>
+                </div>
+                </section>
+            </div>
+        </main>
+
+            <!-- Scripts do projeto -->
+        <script type="module" src="./js/app.firebase.js"></script>
+        <script type="module" src="./js/app.auth.js"></script>
+        <script type="module" src="./js/app.db.js"></script>
+
+            <!-- Módulos da Realocação -->
+        <script type="module" src="./js/app.db.realloc.js"></script>
+        <script type="module" src="./js/pages/realocacao.js"></script>
+    </body>
+</html>

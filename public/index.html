@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="pt-br">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Versão Saúde</title>
+
+  <!-- CSS padrão do projeto -->
+  <link rel="preload" href="./assets/css/main.css" as="style">
+  <link rel="stylesheet" href="./assets/css/main.css">
+
+  <link rel="icon" href="./assets/img/icon.png">
+</head>
+<body class="vs-body">
+  <a class="skip-link" href="#conteudo">Pular para o conteúdo</a>
+
+  <header class="vs-header">
+    <div class="container">
+      <a href="./index.html" class="brand">
+          <img src="./assets/img/icon.png" alt="" class="logo" aria-hidden="true">
+          <span class="brand-name">Versão Saúde</span>
+      </a>
+
+      <nav class="vs-nav" aria-label="Principal">
+        <a href="./calendario.html">Calendário</a>
+        <a href="./preferencias.html">Preferências</a>
+      </nav>
+
+      <div class="actions">
+        <a class="btn btn-primary" href="login.html" data-login>Entrar</a>
+        <button id="btnLogout" class="btn btn-ghost" hidden data-logout>Sair</button>
+      </div>
+    </div>
+  </header>
+
+  <main id="conteudo" class="vs-main">
+    <div class="container">
+      <section class="card">
+        <h1 class="h1">Bem-vindo(a)</h1>
+        <p class="text-muted">Portal de contratos e agenda de sublocação.</p>
+
+        <div class="status-row">
+          <span class="badge">Status</span>
+          <span id="appStatus" class="status">Carregando…</span>
+        </div>
+
+        <div class="grid quick-actions">
+          <a class="tile" href="./contratos.html">
+            <span class="tile-title">Novo contrato</span>
+            <span class="tile-desc">Defina sublocação das salas</span>
+          </a>
+          <a class="tile" href="./calendario.html">
+            <span class="tile-title">Calendário</span>
+            <span class="tile-desc">Agenda do consultório por semana</span>
+          </a>
+          <a class="tile" href="./conflitos.html">
+            <span class="tile-title">Conflitos</span>
+            <span class="tile-desc">Ajuste/corte de faixa</span>
+          </a>
+          <a class="tile" href="./realocacao.html">
+            <span class="tile-title">Realocação</span>
+            <span class="tile-desc">Manutenção e no-show</span>
+          </a>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <footer class="vs-footer">
+    <div class="container">
+      <small>© <span id="y"></span> Versão Saúde • <a href="./privacidade.html">Política de Privacidade</a></small>
+    </div>
+  </footer>
+
+  <!-- JS do projeto (sem CSS embutido) -->
+    <script type="module">
+      import { requireAuth, bindAuthUI } from './js/app.auth.js';
+      await requireAuth();        // redireciona para login se não autenticado
+      bindAuthUI();               // mostra/esconde botões Entrar/Sair
+  </script>
+   <script type="module">
+    import { requireAuth } from './js/app.auth.js';
+    await requireAuth({ redirectTo: './login.html' });
+  </script>
+  <script type="module">
+    import './js/app.config.js';                // garante load
+    import { auth, db } from './js/app.firebase.js'; // inicializa e expõe app/auth/db
+    import { bindAuthUI, exposeAuthForConsole } from './js/app.auth.js';
+
+    import { onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/10.12.4/firebase-auth.js';
+    import { getDoc, doc } from 'https://www.gstatic.com/firebasejs/10.12.4/firebase-firestore.js';
+
+    bindAuthUI();
+    exposeAuthForConsole();
+
+    const st = document.getElementById('appStatus');
+    document.getElementById('y').textContent = new Date().getFullYear();
+
+    onAuthStateChanged(auth, async (user) => {
+      if (!user) { st.textContent = 'Não autenticado.'; return; }
+      try {
+        const pref = await getDoc(doc(db, 'preferences', 'system'));
+        st.textContent = pref.exists() ? '✅ Conectado ao servidor' : 'Conectado, faltam preferências.';
+      } catch (e) {
+        st.textContent = 'Conectado, erro ao ler preferências.';
+        console.error(e);
+      }
+    });
+  </script>
+</body>
+</html>
