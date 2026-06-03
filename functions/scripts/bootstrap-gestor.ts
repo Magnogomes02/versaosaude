@@ -1,0 +1,64 @@
+import { cert, getApps, initializeApp } from "firebase-admin/app";
+import { getAuth } from "firebase-admin/auth";
+import { getFirestore } from "firebase-admin/firestore";
+
+interface Args {
+  email?: string;
+  uid?: string;
+  name?: string;
+}
+
+function parseArgs(): Args {
+  const args: Args = {};
+  for (const item of process.argv.slice(2)) {
+    const [key, ...valueParts] = item.replace(/^--/, "").split("=");
+    const value = valueParts.join("=");
+    if (key === "email") args.email = value;
+    if (key === "uid") args.uid = value;
+    if (key === "name") args.name = value;
+  }
+  return args;
+}
+
+function initAdmin() {
+  if (getApps().length) return;
+  const rawJson = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+  if (rawJson) {
+    initializeApp({ credential: cert(JSON.parse(rawJson)) });
+    return;
+  }
+  initializeApp();
+}
+
+async function main() {
+  const args = parseArgs();
+  if (!args.email && !args.uid) {
+    throw new Error("Informe --email=gestor@exemplo.com ou --uid=UID_DO_USUARIO.");
+  }
+
+  initAdmin();
+  const auth = getAuth();
+  const firestore = getFirestore();
+  const user = args.uid
+    ? await auth.getUser(args.uid)
+    : await auth.getUserByEmail(args.email!);
+
+  await firestore.doc(`profiles/${user.uid}`).set({
+    email: user.email ?? args.email ?? null,
+    fullName: args.name ?? user.displayName ?? user.email ?? "Gestor",
+    updatedAt: new Date(),
+  }, { merge: true });
+
+  await firestore.doc(`user_roles/${user.uid}`).set({
+    role: "gestor",
+    email: user.email ?? args.email ?? null,
+    updatedAt: new Date(),
+  }, { merge: true });
+
+  console.log(`Gestor configurado: ${user.uid} (${user.email ?? "sem email"})`);
+}
+
+main().catch((error) => {
+  console.error(error instanceof Error ? error.message : error);
+  process.exit(1);
+});

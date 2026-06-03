@@ -9,6 +9,7 @@
   "scripts": {
     "build": "tsc",
     "test": "vitest run",
+    "bootstrap:gestor": "tsx scripts/bootstrap-gestor.ts",
     "serve": "npm run build && firebase emulators:start --only functions,firestore",
     "deploy": "firebase deploy --only functions"
   },
@@ -17,6 +18,7 @@
     "firebase-functions": "^6.3.2"
   },
   "devDependencies": {
+    "tsx": "^4.19.2",
     "typescript": "^5.7.3",
     "vitest": "^3.0.5"
   }
