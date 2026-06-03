@@ -1,0 +1,43 @@
+{
+  "name": "versaosaude-v2",
+  "private": true,
+  "version": "2.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "test": "npm run test:functions && npm run test:rules",
+    "test:functions": "npm --prefix functions test",
+    "test:rules": "firebase emulators:exec --only firestore \"vitest run tests/firestore.rules.test.ts\"",
+    "audit:prod": "npm audit --omit=dev --audit-level=high && npm audit --prefix functions --omit=dev --audit-level=high",
+    "functions:build": "npm --prefix functions run build",
+    "functions:test": "npm --prefix functions test"
+  },
+  "dependencies": {
+    "@tanstack/react-query": "^5.83.0",
+    "clsx": "^2.1.1",
+    "date-fns": "^4.1.0",
+    "firebase": "^11.3.1",
+    "lucide-react": "^0.468.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "react-router-dom": "^7.1.5"
+  },
+  "devDependencies": {
+    "@firebase/rules-unit-testing": "^4.0.1",
+    "@types/node": "^22.13.1",
+    "@types/react": "^19.0.8",
+    "@types/react-dom": "^19.0.3",
+    "@vitejs/plugin-react": "^4.3.4",
+    "firebase-tools": "^12.9.1",
+    "typescript": "^5.7.3",
+    "vite": "^6.1.0",
+    "vitest": "^3.0.5"
+  },
+  "overrides": {
+    "firebase-tools": {
+      "universal-analytics": "0.4.23"
+    }
+  }
+}

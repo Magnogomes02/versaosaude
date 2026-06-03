@@ -1,64 +1,109 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+    function isSignedIn() {
+      return request.auth != null;
+    }
 
-    function isSignedIn() { return request.auth != null; }
+    function roleDoc() {
+      return get(/databases/$(database)/documents/user_roles/$(request.auth.uid));
+    }
+
     function isGestor() {
       return isSignedIn()
         && exists(/databases/$(database)/documents/user_roles/$(request.auth.uid))
-        && get(/databases/$(database)/documents/user_roles/$(request.auth.uid)).data.role == 'gestor';
+        && roleDoc().data.role == 'gestor';
     }
 
-    // Preferências globais (compat: mantemos 'preferences/system')
+    function isVisualizador() {
+      return isSignedIn()
+        && exists(/databases/$(database)/documents/user_roles/$(request.auth.uid))
+        && roleDoc().data.role == 'visualizador';
+    }
+
+    function isProfessionalFor(professionalId) {
+      return isSignedIn()
+        && exists(/databases/$(database)/documents/profiles/$(request.auth.uid))
+        && get(/databases/$(database)/documents/profiles/$(request.auth.uid)).data.professionalId == professionalId;
+    }
+
+    match /profiles/{uid} {
+      allow read: if isGestor() || (isSignedIn() && request.auth.uid == uid);
+      allow update: if isSignedIn() && request.auth.uid == uid;
+      allow create, delete: if false;
+    }
+
+    match /user_roles/{uid} {
+      allow read: if isGestor() || (isSignedIn() && request.auth.uid == uid);
+      allow write: if false;
+    }
+
     match /preferences/{docId} {
       allow read: if isSignedIn();
       allow write: if isGestor();
     }
 
-    // Catálogos básicos
     match /rooms/{docId} {
       allow read: if isSignedIn();
       allow write: if isGestor();
     }
+
     match /professionals/{docId} {
       allow read: if isSignedIn();
       allow write: if isGestor();
     }
 
-    // Contratos e reservas
     match /contracts/{docId} {
-      allow read: if isSignedIn();
-      allow write: if isGestor();
+      allow read: if isGestor() || isVisualizador() || isProfessionalFor(resource.data.professionalId);
+      allow write: if false;
     }
+
+    match /contract_schedules/{docId} {
+      allow read: if isSignedIn();
+      allow write: if false;
+    }
+
     match /bookings/{docId} {
-      allow read: if isSignedIn();
-      allow write: if isGestor();
+      allow read: if isGestor() || isVisualizador() || isProfessionalFor(resource.data.professionalId);
+      allow write: if false;
     }
 
-    // Modelos e aprovações (caso já existam)
-    match /modelos/{docId} {
+    match /booking_conflicts/{docId} {
       allow read: if isSignedIn();
-      allow write: if isGestor();
-    }
-    match /aprovacoes/{docId} {
-      allow read: if isSignedIn();
-      allow write: if isGestor();
+      allow write: if false;
     }
 
-    // Logs de auditoria
+    match /receivables/{docId} {
+      allow read: if isGestor() || isVisualizador() || isProfessionalFor(resource.data.professionalId);
+      allow write: if false;
+    }
+
+    match /receivable_payments/{docId} {
+      allow read: if isGestor() || isVisualizador() || isProfessionalFor(resource.data.professionalId);
+      allow write: if false;
+    }
+
+    match /receivable_receipts/{docId} {
+      allow read: if isGestor() || isVisualizador() || isProfessionalFor(resource.data.professionalId);
+      allow write: if false;
+    }
+
+    match /contract_attachments/{docId} {
+      allow read: if isSignedIn();
+      allow write: if false;
+    }
+
+    match /notification_queue/{docId} {
+      allow read: if isGestor();
+      allow write: if false;
+    }
+
     match /audit_logs/{docId} {
-      allow create: if isSignedIn();
+      allow create: if false;
       allow read: if isGestor();
       allow update, delete: if false;
     }
 
-    // Roles: leitura apenas do próprio doc
-    match /user_roles/{uid} {
-      allow read: if isSignedIn() && request.auth.uid == uid;
-      allow write: if false;
-    }
-
-    // Bloqueio padrão
     match /{document=**} {
       allow read, write: if false;
     }
