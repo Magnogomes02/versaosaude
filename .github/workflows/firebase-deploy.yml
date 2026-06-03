@@ -1,0 +1,64 @@
+name: Firebase Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      deploy_target:
+        description: Firebase deploy target
+        required: true
+        default: hosting,firestore,functions
+        type: choice
+        options:
+          - hosting
+          - hosting,firestore
+          - hosting,firestore,functions
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Setup Java for Firebase Emulator
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Install functions dependencies
+        run: npm --prefix functions ci --omit=peer
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Build functions
+        run: npm run functions:build
+
+      - name: Run tests
+        run: npm test
+
+      - name: Write Firebase service account
+        run: |
+          printf '%s' '${{ secrets.FIREBASE_SERVICE_ACCOUNT_VERSAOSAUDE_PROD }}' > "$RUNNER_TEMP/firebase-service-account.json"
+        shell: bash
+
+      - name: Deploy to Firebase
+        env:
+          GOOGLE_APPLICATION_CREDENTIALS: ${{ runner.temp }}/firebase-service-account.json
+        run: |
+          npx firebase deploy \
+            --project versaosaude-prod \
+            --only "${{ inputs.deploy_target }}"

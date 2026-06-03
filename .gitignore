@@ -1,5 +1,9 @@
 # Dependências
 node_modules/
+dist/
+*.tsbuildinfo
+functions/lib/
+functions/node_modules/
 
 # Firebase cache/local
 .firebase/
