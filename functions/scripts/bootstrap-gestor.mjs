@@ -2,14 +2,8 @@ import { cert, getApps, initializeApp } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
 import { getFirestore } from "firebase-admin/firestore";
 
-interface Args {
-  email?: string;
-  uid?: string;
-  name?: string;
-}
-
-function parseArgs(): Args {
-  const args: Args = {};
+function parseArgs() {
+  const args = {};
   for (const item of process.argv.slice(2)) {
     const [key, ...valueParts] = item.replace(/^--/, "").split("=");
     const value = valueParts.join("=");
@@ -41,7 +35,7 @@ async function main() {
   const firestore = getFirestore();
   const user = args.uid
     ? await auth.getUser(args.uid)
-    : await auth.getUserByEmail(args.email!);
+    : await auth.getUserByEmail(args.email);
 
   await firestore.doc(`profiles/${user.uid}`).set({
     email: user.email ?? args.email ?? null,
