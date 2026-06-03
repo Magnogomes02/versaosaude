@@ -2,7 +2,7 @@ import { cert, getApps, initializeApp } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
 import { getFirestore } from "firebase-admin/firestore";
 
-const OWNER_EMAIL = "magno.gomes.santiago@gmail.com";
+const OWNER_EMAIL = "magno.gomes02@gmail.com";
 
 function parseArgs() {
   const args = {};
