@@ -39,7 +39,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     user,
     role,
     loading,
-    isGestor: role === "gestor",
+    isGestor: role === "owner" || role === "gestor",
     login: async (email, password) => {
       await signInWithEmailAndPassword(auth, email, password);
     },

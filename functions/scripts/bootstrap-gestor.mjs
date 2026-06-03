@@ -2,6 +2,8 @@ import { cert, getApps, initializeApp } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
 import { getFirestore } from "firebase-admin/firestore";
 
+const OWNER_EMAIL = "magno.gomes.santiago@gmail.com";
+
 function parseArgs() {
   const args = {};
   for (const item of process.argv.slice(2)) {
@@ -36,16 +38,20 @@ async function main() {
   const user = args.uid
     ? await auth.getUser(args.uid)
     : await auth.getUserByEmail(args.email);
+  const targetEmail = user.email ?? args.email ?? null;
+  if (targetEmail?.toLowerCase() === OWNER_EMAIL) {
+    throw new Error(`Use npm run bootstrap:owner para ${OWNER_EMAIL}.`);
+  }
 
   await firestore.doc(`profiles/${user.uid}`).set({
-    email: user.email ?? args.email ?? null,
+    email: targetEmail,
     fullName: args.name ?? user.displayName ?? user.email ?? "Gestor",
     updatedAt: new Date(),
   }, { merge: true });
 
   await firestore.doc(`user_roles/${user.uid}`).set({
     role: "gestor",
-    email: user.email ?? args.email ?? null,
+    email: targetEmail,
     updatedAt: new Date(),
   }, { merge: true });
 

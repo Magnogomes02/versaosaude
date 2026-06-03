@@ -10,6 +10,7 @@
     "build": "tsc",
     "test": "vitest run",
     "bootstrap:gestor": "node scripts/bootstrap-gestor.mjs",
+    "bootstrap:owner": "node scripts/bootstrap-owner.mjs",
     "serve": "npm run build && firebase emulators:start --only functions,firestore",
     "deploy": "firebase deploy --only functions"
   },

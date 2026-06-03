@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  createReceiptAuthenticationCode,
   generateMonthlyReceivables,
   resolveReceivableStatus,
   shouldUpdateFutureReceivable,
@@ -60,5 +61,23 @@ describe("financial domain", () => {
       status: "paid",
       amountPaid: 1200,
     })).toBe(false);
+  });
+
+  it("signs receipt authentication codes with stable HMAC input", () => {
+    const payload = {
+      receiptId: "receipt-1",
+      receiptNumber: "REC-20260603120000-ABC123",
+      receivableId: "receivable-1",
+      contractId: "contract-1",
+      professionalId: "professional-1",
+      referenceMonth: "2026-06-01",
+      amountDue: 1200,
+      amountPaid: 1200,
+    };
+    const code = createReceiptAuthenticationCode("secret-a", payload);
+    expect(code).toMatch(/^REC-AUTH-V1-[A-F0-9]{32}$/);
+    expect(createReceiptAuthenticationCode("secret-a", payload)).toBe(code);
+    expect(createReceiptAuthenticationCode("secret-b", payload)).not.toBe(code);
+    expect(createReceiptAuthenticationCode("secret-a", { ...payload, amountPaid: 1100 })).not.toBe(code);
   });
 });

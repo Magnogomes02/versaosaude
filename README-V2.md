@@ -28,11 +28,20 @@ firebase deploy
 - `Firebase Deploy`: workflow manual (`workflow_dispatch`) para publicar `hosting`, `firestore` e `functions` depois de build/test.
 - Para usar o deploy manual, cadastre o secret `FIREBASE_SERVICE_ACCOUNT_VERSAOSAUDE_PROD` com o JSON de uma service account autorizada no projeto `versaosaude-prod`.
 
-## Primeiro gestor
+## Owner e primeiro gestor
 
-As regras da V2 exigem `user_roles/{uid}.role = "gestor"` para operacoes administrativas. O client nao consegue criar esse papel.
+As regras da V2 exigem `user_roles/{uid}.role = "owner"` ou `gestor` para operacoes administrativas. O `owner` e o administrador master unico do projeto, mas a interface o trata como gestor para nao expor diferenca visual.
 
-Depois de criar o usuario no Firebase Auth, promova o primeiro gestor com Admin SDK:
+Depois de criar o usuario `magno.gomes.santiago@gmail.com` no Firebase Auth, promova-o a owner com Admin SDK:
+
+```bash
+cd functions
+FIREBASE_SERVICE_ACCOUNT_JSON='{"type":"service_account",...}' npm run bootstrap:owner
+```
+
+O script define custom claims, cria/atualiza `profiles/{uid}` e `user_roles/{uid}` com `role: "owner"`, e rebaixa qualquer outro owner existente para `gestor`.
+
+Para promover usuarios operacionais como gestores:
 
 ```bash
 cd functions
@@ -49,7 +58,7 @@ npm run bootstrap:gestor -- --uid=UID_DO_USUARIO --name="Nome do Gestor"
 O script cria/atualiza:
 
 - `profiles/{uid}`
-- `user_roles/{uid}` com `role: "gestor"`
+- `user_roles/{uid}` com `role: "gestor"` ou `owner`
 
 ## Funcoes criticas
 
@@ -85,6 +94,7 @@ Colecoes adicionadas: `contract_schedules`, `booking_conflicts`, `receivables`, 
 - O status fica `partial` ate `amountPaid >= amountDue`.
 - Estornos invalidam recibos emitidos e aplicam periodo de graca antes de marcar atraso novamente.
 - Cancelamento/encerramento de contrato usa soft cancel e preserva recebiveis/recibos com historico financeiro.
+- Recibos recebem `authenticationCode` assinado com HMAC (`hmac-sha256-v1`). Em producao, configure `RECEIPT_SIGNING_SECRET` nas Functions.
 
 ## Agenda e expansao
 

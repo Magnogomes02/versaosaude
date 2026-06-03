@@ -25,6 +25,7 @@ function firestoreAs(uid: string) {
 async function seedBaseData() {
   await testEnv.withSecurityRulesDisabled(async (context) => {
     const db = context.firestore();
+    await setDoc(doc(db, "user_roles/owner-1"), { role: "owner" });
     await setDoc(doc(db, "user_roles/gestor-1"), { role: "gestor" });
     await setDoc(doc(db, "user_roles/viewer-1"), { role: "visualizador" });
     await setDoc(doc(db, "user_roles/prof-user-1"), { role: "profissional" });
@@ -74,6 +75,14 @@ describe("firestore.rules", () => {
     await assertSucceeds(setDoc(doc(db, "rooms/new-room"), { name: "Sala nova", active: true }));
     await assertSucceeds(setDoc(doc(db, "professionals/new-prof"), { name: "Novo profissional", active: true }));
     await assertSucceeds(setDoc(doc(db, "preferences/system"), { bookingHorizonDays: 90 }, { merge: true }));
+  });
+
+  it("trata owner como administrador sem liberar escrita nos dominios protegidos", async () => {
+    const db = firestoreAs("owner-1");
+    await assertSucceeds(setDoc(doc(db, "rooms/owner-room"), { name: "Sala owner", active: true }));
+    await assertSucceeds(setDoc(doc(db, "preferences/system"), { bookingHorizonDays: 120 }, { merge: true }));
+    await assertFails(setDoc(doc(db, "contracts/owner-contract"), { professionalId: "prof-1" }));
+    await assertFails(setDoc(doc(db, "receivable_receipts/owner-receipt"), { receivableId: "rec-1", status: "issued" }));
   });
 
   it("bloqueia escrita de catalogo para visualizador", async () => {

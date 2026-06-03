@@ -5,6 +5,7 @@ import { HttpsError, onCall } from "firebase-functions/v2/https";
 import { onSchedule } from "firebase-functions/v2/scheduler";
 import {
   addDays,
+  createReceiptAuthenticationCode,
   generateMonthlyReceivables,
   resolveReceivableStatus,
   shouldUpdateFutureReceivable,
@@ -38,7 +39,8 @@ function asNumber(value: unknown, fallback = 0) {
 async function assertGestor(uid?: string) {
   if (!uid) throw new HttpsError("unauthenticated", "Login obrigatorio.");
   const role = await db.doc(`user_roles/${uid}`).get();
-  if (role.data()?.role !== "gestor") {
+  const value = role.data()?.role;
+  if (value !== "owner" && value !== "gestor") {
     throw new HttpsError("permission-denied", "Apenas gestores podem executar esta acao.");
   }
 }
@@ -95,6 +97,12 @@ async function getSystemSettings() {
     indefiniteContractMonths: asNumber(data.indefiniteContractMonths, 12),
     overdueGraceDaysAfterRevert: asNumber(data.overdueGraceDaysAfterRevert, 3),
   };
+}
+
+function receiptSigningSecret() {
+  return process.env.RECEIPT_SIGNING_SECRET
+    ?? process.env.GCLOUD_PROJECT
+    ?? "versaosaude-local-dev";
 }
 
 async function deleteQuery(query: Query) {
@@ -528,6 +536,16 @@ export const issueReceipt = onCall({ region: REGION }, async (request) => {
   if (!existing.empty) throw new HttpsError("already-exists", "Ja existe recibo ativo para este recebivel.");
   const ref = db.collection("receivable_receipts").doc();
   const receiptNumber = `REC-${new Date().toISOString().replace(/\D/g, "").slice(0, 14)}-${ref.id.slice(0, 6).toUpperCase()}`;
+  const authenticationCode = createReceiptAuthenticationCode(receiptSigningSecret(), {
+    receiptId: ref.id,
+    receiptNumber,
+    receivableId,
+    contractId: row.contractId ?? null,
+    professionalId: asString(row.professionalId),
+    referenceMonth: asString(row.referenceMonth),
+    amountDue: asNumber(row.amountDue),
+    amountPaid: asNumber(row.amountPaid),
+  });
   await ref.set({
     receivableId,
     contractId: row.contractId ?? null,
@@ -540,7 +558,8 @@ export const issueReceipt = onCall({ region: REGION }, async (request) => {
     amountDue: row.amountDue,
     amountPaid: row.amountPaid,
     receiptNumber,
-    authenticationCode: `${ref.id}:${receiptNumber}`,
+    authenticationCode,
+    signatureVersion: "hmac-sha256-v1",
     status: "issued",
     visibleInvalidation: false,
     issuedAt: FieldValue.serverTimestamp(),

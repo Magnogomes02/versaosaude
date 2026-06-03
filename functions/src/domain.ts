@@ -1,3 +1,5 @@
+import { createHmac } from "node:crypto";
+
 export type ReceivableStatus = "open" | "partial" | "paid" | "overdue" | "cancelled";
 
 export interface MonthReceivable {
@@ -14,6 +16,17 @@ export interface PaymentSummary {
   currentStatus?: ReceivableStatus;
   lastRevertedAt?: string | null;
   graceDaysAfterRevert?: number;
+}
+
+export interface ReceiptSignaturePayload {
+  receiptId: string;
+  receiptNumber: string;
+  receivableId: string;
+  contractId?: string | null;
+  professionalId: string;
+  referenceMonth: string;
+  amountDue: number;
+  amountPaid: number;
 }
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
@@ -99,4 +112,19 @@ export function shouldUpdateFutureReceivable(input: {
     && input.status !== "paid"
     && input.status !== "cancelled"
     && Number(input.amountPaid || 0) <= 0;
+}
+
+export function createReceiptAuthenticationCode(secret: string, payload: ReceiptSignaturePayload) {
+  const canonical = [
+    payload.receiptId,
+    payload.receiptNumber,
+    payload.receivableId,
+    payload.contractId ?? "",
+    payload.professionalId,
+    payload.referenceMonth,
+    payload.amountDue.toFixed(2),
+    payload.amountPaid.toFixed(2),
+  ].join("|");
+  const signature = createHmac("sha256", secret).update(canonical).digest("hex").slice(0, 32).toUpperCase();
+  return `REC-AUTH-V1-${signature}`;
 }

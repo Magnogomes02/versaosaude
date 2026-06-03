@@ -12,7 +12,7 @@ service cloud.firestore {
     function isGestor() {
       return isSignedIn()
         && exists(/databases/$(database)/documents/user_roles/$(request.auth.uid))
-        && roleDoc().data.role == 'gestor';
+        && roleDoc().data.role in ['owner', 'gestor'];
     }
 
     function isVisualizador() {

@@ -1,4 +1,4 @@
-export type UserRole = "gestor" | "visualizador" | "profissional";
+export type UserRole = "owner" | "gestor" | "visualizador" | "profissional";
 export type ContractStatus = "draft" | "active" | "closed" | "cancelled";
 export type BookingStatus = "active" | "conflict" | "cancelled" | "reallocated";
 export type ReceivableStatus = "open" | "partial" | "paid" | "overdue" | "cancelled";
