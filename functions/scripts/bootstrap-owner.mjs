@@ -2,7 +2,7 @@ import { cert, getApps, initializeApp } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
 import { FieldValue, getFirestore } from "firebase-admin/firestore";
 
-const DEFAULT_OWNER_EMAIL = "magno.gomes02@gmail.com";
+const DEFAULT_OWNER_EMAIL = "magno.gomes.santiago@gmail.com";
 
 function parseArgs() {
   const args = {};
