@@ -12,7 +12,7 @@ import {
   where,
 } from "firebase/firestore";
 import { db, functions } from "@/lib/firebase";
-import type { AuditLog, Booking, Contract, Professional, Receivable, Room } from "@/types";
+import type { AuditLog, Booking, Contract, Professional, Receivable, ReceivablePayment, ReceivableReceipt, Room } from "@/types";
 
 export async function listCollection<T>(name: string, max = 200): Promise<T[]> {
   const snap = await getDocs(query(collection(db, name), limit(max)));
@@ -84,6 +84,16 @@ export async function listReceivables(status?: Receivable["status"]) {
     : query(base, orderBy("dueDate", "asc"), limit(200));
   const snap = await getDocs(q);
   return snap.docs.map((doc) => ({ id: doc.id, ...doc.data() }) as Receivable);
+}
+
+export async function listPayments() {
+  const snap = await getDocs(query(collection(db, "receivable_payments"), orderBy("paidAt", "desc"), limit(300)));
+  return snap.docs.map((doc) => ({ id: doc.id, ...doc.data() }) as ReceivablePayment);
+}
+
+export async function listReceipts() {
+  const snap = await getDocs(query(collection(db, "receivable_receipts"), orderBy("issuedAt", "desc"), limit(300)));
+  return snap.docs.map((doc) => ({ id: doc.id, ...doc.data() }) as ReceivableReceipt);
 }
 
 export async function listAuditLogs() {

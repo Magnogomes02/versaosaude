@@ -2,6 +2,7 @@ import { FormEvent, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   callActivateContract,
+  callApplyContractValueAdjustment,
   callCloseOrCancelContract,
   callCreateOrUpdateContract,
   listContracts,
@@ -31,6 +32,18 @@ export function ContractsPage() {
   const [message, setMessage] = useState("");
   const [closeAction, setCloseAction] = useState<{ contractId: string; mode: "closed" | "cancelled" } | null>(null);
   const [closeReason, setCloseReason] = useState("");
+  const [closeForm, setCloseForm] = useState({
+    effectiveDate: new Date().toISOString().slice(0, 10),
+    receivableCutoffMonth: new Date().toISOString().slice(0, 7),
+    closeFinancialAction: "cancel_unpaid",
+    penaltyAmount: "0",
+  });
+  const [adjustTarget, setAdjustTarget] = useState<{ contractId: string; monthlyValue: number } | null>(null);
+  const [adjustForm, setAdjustForm] = useState({
+    newMonthlyValue: "",
+    effectiveReferenceMonth: new Date().toISOString().slice(0, 7),
+    reason: "",
+  });
 
   const refresh = () => {
     queryClient.invalidateQueries({ queryKey: ["contracts"] });
@@ -67,9 +80,34 @@ export function ContractsPage() {
 
   async function confirmClose() {
     if (!closeAction || !closeReason.trim()) return;
-    await callCloseOrCancelContract({ ...closeAction, reason: closeReason.trim() });
+    const result = await callCloseOrCancelContract({
+      ...closeAction,
+      reason: closeReason.trim(),
+      effectiveDate: closeForm.effectiveDate,
+      cancellationBookingCutoff: closeForm.effectiveDate,
+      cancellationReceivableCutoffMonth: `${closeForm.receivableCutoffMonth}-01`,
+      closeFinancialAction: closeForm.closeFinancialAction,
+      penaltyAmount: Number(closeForm.penaltyAmount),
+    });
+    const data = result.data as { cancelledBookings?: number; cancelledReceivables?: number; lossAmount?: number; penaltyReceivableId?: string | null };
+    setMessage(`Operacao concluida: ${data.cancelledBookings ?? 0} reservas, ${data.cancelledReceivables ?? 0} recebiveis cancelados, perda ${brl(data.lossAmount ?? 0)}.`);
     setCloseAction(null);
     setCloseReason("");
+    refresh();
+  }
+
+  async function confirmAdjustment() {
+    if (!adjustTarget || !adjustForm.reason.trim()) return;
+    const result = await callApplyContractValueAdjustment({
+      contractId: adjustTarget.contractId,
+      newMonthlyValue: Number(adjustForm.newMonthlyValue),
+      effectiveReferenceMonth: `${adjustForm.effectiveReferenceMonth}-01`,
+      reason: adjustForm.reason.trim(),
+    });
+    const data = result.data as { updated?: number };
+    setMessage(`Reajuste aplicado em ${data.updated ?? 0} recebiveis futuros.`);
+    setAdjustTarget(null);
+    setAdjustForm({ newMonthlyValue: "", effectiveReferenceMonth: new Date().toISOString().slice(0, 7), reason: "" });
     refresh();
   }
 
@@ -92,6 +130,7 @@ export function ContractsPage() {
                 <td><span className={`badge ${contract.status}`}>{contract.status}</span></td>
                 <td className="actions">
                   {contract.status !== "active" && <button onClick={() => activate(contract.id)} disabled={!isGestor}>Ativar</button>}
+                  {contract.status === "active" && <button onClick={() => { setAdjustTarget({ contractId: contract.id, monthlyValue: Number(contract.monthlyValue) }); setAdjustForm({ ...adjustForm, newMonthlyValue: String(contract.monthlyValue) }); }} disabled={!isGestor}>Aplicar reajuste</button>}
                   {contract.status === "active" && <button onClick={() => setCloseAction({ contractId: contract.id, mode: "closed" })} disabled={!isGestor}>Encerrar</button>}
                   {contract.status !== "cancelled" && <button onClick={() => setCloseAction({ contractId: contract.id, mode: "cancelled" })} disabled={!isGestor}>Cancelar</button>}
                 </td>
@@ -172,12 +211,60 @@ export function ContractsPage() {
             <h2>{closeAction.mode === "closed" ? "Encerrar contrato" : "Cancelar contrato"}</h2>
             <p className="muted">A operacao preserva historico financeiro e cancela reservas futuras.</p>
             <label>
+              Data efetiva
+              <input type="date" value={closeForm.effectiveDate} onChange={(e) => setCloseForm({ ...closeForm, effectiveDate: e.target.value })} />
+            </label>
+            <label>
+              Cancelar recebiveis a partir de
+              <input type="month" value={closeForm.receivableCutoffMonth} onChange={(e) => setCloseForm({ ...closeForm, receivableCutoffMonth: e.target.value })} />
+            </label>
+            <label>
+              Tratamento financeiro
+              <select value={closeForm.closeFinancialAction} onChange={(e) => setCloseForm({ ...closeForm, closeFinancialAction: e.target.value })}>
+                <option value="cancel_unpaid">Cancelar nao pagos como perda</option>
+                <option value="keep_all">Manter recebiveis em aberto</option>
+              </select>
+            </label>
+            <label>
+              Multa contratual
+              <input type="number" step="0.01" value={closeForm.penaltyAmount} onChange={(e) => setCloseForm({ ...closeForm, penaltyAmount: e.target.value })} />
+            </label>
+            <label>
               Motivo
               <textarea rows={4} value={closeReason} onChange={(e) => setCloseReason(e.target.value)} autoFocus />
             </label>
             <div className="actions end">
               <button type="button" onClick={() => { setCloseAction(null); setCloseReason(""); }}>Voltar</button>
               <button className="primary-button" disabled={!closeReason.trim()} onClick={confirmClose}>Confirmar</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {adjustTarget && (
+        <div className="modal-backdrop">
+          <div className="modal">
+            <h2>Aplicar reajuste</h2>
+            <p className="muted">Recebiveis pagos e cancelados nao serao alterados. Recebiveis parciais serao recalculados.</p>
+            <label>
+              Valor atual
+              <input value={brl(adjustTarget.monthlyValue)} disabled />
+            </label>
+            <label>
+              Novo valor
+              <input type="number" step="0.01" value={adjustForm.newMonthlyValue} onChange={(e) => setAdjustForm({ ...adjustForm, newMonthlyValue: e.target.value })} />
+            </label>
+            <label>
+              A partir da competencia
+              <input type="month" value={adjustForm.effectiveReferenceMonth} onChange={(e) => setAdjustForm({ ...adjustForm, effectiveReferenceMonth: e.target.value })} />
+            </label>
+            <label>
+              Motivo
+              <textarea rows={4} value={adjustForm.reason} onChange={(e) => setAdjustForm({ ...adjustForm, reason: e.target.value })} />
+            </label>
+            <div className="actions end">
+              <button type="button" onClick={() => setAdjustTarget(null)}>Voltar</button>
+              <button className="primary-button" disabled={!adjustForm.reason.trim() || Number(adjustForm.newMonthlyValue) <= 0} onClick={confirmAdjustment}>Confirmar reajuste</button>
             </div>
           </div>
         </div>

@@ -56,10 +56,12 @@ export interface Booking {
 
 export interface Receivable {
   id: string;
-  kind: "contract" | "single";
+  kind: "contract" | "single" | "penalty";
+  type?: string;
   contractId?: string | null;
   bookingId?: string | null;
   professionalId: string;
+  professionalName?: string | null;
   roomId?: string | null;
   roomName?: string | null;
   referenceMonth: string;
@@ -67,7 +69,41 @@ export interface Receivable {
   amountDue: number;
   amountPaid: number;
   status: ReceivableStatus;
+  totalLateFees?: number;
+  totalInterest?: number;
+  totalDiscounts?: number;
   lastRevertedAt?: unknown;
+}
+
+export interface ReceivablePayment {
+  id: string;
+  receivableId: string;
+  contractId?: string | null;
+  bookingId?: string | null;
+  professionalId: string;
+  amount: number;
+  baseAmount?: number;
+  lateFeeAmount?: number;
+  interestAmount?: number;
+  discountAmount?: number;
+  totalPaid?: number;
+  paidAt: string;
+  paymentMethod?: string;
+  method?: string;
+  notes?: string | null;
+  status: "active" | "reverted";
+  receiptId?: string | null;
+}
+
+export interface ReceivableReceipt {
+  id: string;
+  receivableId: string;
+  paymentId: string;
+  receiptNumber: string;
+  amountPaid: number;
+  remainingBalance: number;
+  status: ReceiptStatus;
+  authenticationCode: string;
 }
 
 export interface AuditLog {

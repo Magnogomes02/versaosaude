@@ -29,6 +29,22 @@ export interface ReceiptSignaturePayload {
   amountPaid: number;
 }
 
+export interface LateChargeSettings {
+  lateFeeEnabled?: boolean;
+  lateFeeFixedAmount?: number;
+  lateFeePercent?: number;
+  interestEnabled?: boolean;
+  interestDailyPercent?: number;
+  graceDays?: number;
+}
+
+export interface LateChargeResult {
+  daysLate: number;
+  lateFeeAmount: number;
+  interestAmount: number;
+  suggestedTotal: number;
+}
+
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
 export function toDateOnly(value: Date) {
@@ -109,9 +125,8 @@ export function shouldUpdateFutureReceivable(input: {
   amountPaid: number;
 }) {
   return input.referenceMonth >= startOfMonth(input.effectiveMonth)
-    && input.status !== "paid"
     && input.status !== "cancelled"
-    && Number(input.amountPaid || 0) <= 0;
+    && input.status !== "paid";
 }
 
 export function createReceiptAuthenticationCode(secret: string, payload: ReceiptSignaturePayload) {
@@ -127,4 +142,33 @@ export function createReceiptAuthenticationCode(secret: string, payload: Receipt
   ].join("|");
   const signature = createHmac("sha256", secret).update(canonical).digest("hex").slice(0, 32).toUpperCase();
   return `REC-AUTH-V1-${signature}`;
+}
+
+export function calculateLateCharges(input: {
+  amountDue: number;
+  dueDate: string;
+  paidAt: string;
+  settings: LateChargeSettings;
+}): LateChargeResult {
+  const due = parseDateOnly(input.dueDate);
+  const paid = parseDateOnly(input.paidAt.slice(0, 10));
+  const rawDaysLate = Math.floor((paid.getTime() - due.getTime()) / MS_PER_DAY);
+  const daysLate = Math.max(0, rawDaysLate - Math.max(0, Math.trunc(input.settings.graceDays ?? 0)));
+  if (daysLate <= 0) {
+    return { daysLate: 0, lateFeeAmount: 0, interestAmount: 0, suggestedTotal: input.amountDue };
+  }
+  const percentFee = input.settings.lateFeeEnabled
+    ? input.amountDue * Math.max(0, input.settings.lateFeePercent ?? 0) / 100
+    : 0;
+  const fixedFee = input.settings.lateFeeEnabled ? Math.max(0, input.settings.lateFeeFixedAmount ?? 0) : 0;
+  const lateFeeAmount = Number(Math.max(fixedFee, percentFee).toFixed(2));
+  const interestAmount = input.settings.interestEnabled
+    ? Number((input.amountDue * Math.max(0, input.settings.interestDailyPercent ?? 0) / 100 * daysLate).toFixed(2))
+    : 0;
+  return {
+    daysLate,
+    lateFeeAmount,
+    interestAmount,
+    suggestedTotal: Number((input.amountDue + lateFeeAmount + interestAmount).toFixed(2)),
+  };
 }

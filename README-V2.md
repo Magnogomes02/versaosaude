@@ -19,6 +19,8 @@ npm run audit:prod
 npm --prefix functions install
 npm --prefix functions run build
 npm --prefix functions test
+npm --prefix functions run bootstrap:preferences
+npm --prefix functions run seed:finance
 firebase deploy
 ```
 
@@ -80,21 +82,30 @@ Jobs agendados:
 - `markOverdueReceivables`
 - `extendOpenEndedContracts`
 - `enqueueDueNotifications`
+- `processNotificationQueue`
 
 ## Modelo de dados novo
 
 Colecoes mantidas: `rooms`, `professionals`, `contracts`, `bookings`, `preferences`, `user_roles`, `audit_logs`.
 
-Colecoes adicionadas: `contract_schedules`, `booking_conflicts`, `receivables`, `receivable_payments`, `receivable_receipts`, `contract_attachments`, `notification_queue`.
+Colecoes adicionadas: `contract_schedules`, `booking_conflicts`, `receivables`, `receivable_payments`, `receivable_receipts`, `contract_attachments`, `contract_adjustments`, `notification_queue`.
 
 ## Integridade financeira
 
 - Pagamentos parciais sao registrados em `receivable_payments`.
 - `receivables.amountPaid` acumula pagamentos ativos.
 - O status fica `partial` ate `amountPaid >= amountDue`.
-- Estornos invalidam recibos emitidos e aplicam periodo de graca antes de marcar atraso novamente.
+- Recibos sao emitidos por pagamento individual (`paymentId`), inclusive em pagamentos parciais.
+- Estornos invalidam recibos emitidos do pagamento estornado e aplicam periodo de graca antes de marcar atraso novamente.
 - Cancelamento/encerramento de contrato usa soft cancel e preserva recebiveis/recibos com historico financeiro.
 - Recibos recebem `authenticationCode` assinado com HMAC (`hmac-sha256-v1`). Em producao, configure `RECEIPT_SIGNING_SECRET` nas Functions.
+- Recebiveis `cancelled` sao tratados como perda financeira na analise gerencial.
+- Pagamentos atrasados aceitam multa, juros e desconto separados; o backend tambem calcula sugestao com base em `preferences/system`.
+
+## Scripts de teste
+
+- `npm --prefix functions run bootstrap:preferences`: cria/atualiza `preferences/system` com horizonte, juros, multa e notificacoes.
+- `npm --prefix functions run seed:finance`: reseta colecoes operacionais de teste e popula cenarios de recebiveis open/partial/paid/overdue/cancelled, multa, multi-sala, pagamento parcial e notificacoes. O script nao apaga usuarios Auth, `profiles` ou `user_roles`.
 
 ## Agenda e expansao
 

@@ -83,6 +83,7 @@ describe("firestore.rules", () => {
     await assertSucceeds(setDoc(doc(db, "preferences/system"), { bookingHorizonDays: 120 }, { merge: true }));
     await assertFails(setDoc(doc(db, "contracts/owner-contract"), { professionalId: "prof-1" }));
     await assertFails(setDoc(doc(db, "receivable_receipts/owner-receipt"), { receivableId: "rec-1", status: "issued" }));
+    await assertFails(setDoc(doc(db, "contract_adjustments/owner-adjustment"), { contractId: "contract-1" }));
   });
 
   it("bloqueia escrita de catalogo para visualizador", async () => {
@@ -98,6 +99,7 @@ describe("firestore.rules", () => {
     await assertFails(updateDoc(doc(db, "receivables/rec-1"), { amountPaid: 1000, status: "paid" }));
     await assertFails(setDoc(doc(db, "receivable_payments/pay-1"), { receivableId: "rec-1", amount: 1000 }));
     await assertFails(setDoc(doc(db, "receivable_receipts/receipt-1"), { receivableId: "rec-1", status: "issued" }));
+    await assertFails(setDoc(doc(db, "contract_adjustments/adjustment-1"), { contractId: "contract-1" }));
   });
 
   it("limita profissional aos proprios contratos e recebiveis", async () => {

@@ -11,6 +11,8 @@
     "test": "vitest run",
     "bootstrap:gestor": "node scripts/bootstrap-gestor.mjs",
     "bootstrap:owner": "node scripts/bootstrap-owner.mjs",
+    "bootstrap:preferences": "node scripts/bootstrap-preferences.mjs",
+    "seed:finance": "node scripts/seed-finance-scenarios.mjs",
     "serve": "npm run build && firebase emulators:start --only functions,firestore",
     "deploy": "firebase deploy --only functions"
   },

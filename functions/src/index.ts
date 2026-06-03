@@ -5,6 +5,7 @@ import { HttpsError, onCall } from "firebase-functions/v2/https";
 import { onSchedule } from "firebase-functions/v2/scheduler";
 import {
   addDays,
+  calculateLateCharges,
   createReceiptAuthenticationCode,
   generateMonthlyReceivables,
   resolveReceivableStatus,
@@ -18,6 +19,7 @@ const db = admin.firestore();
 
 type Dict = Record<string, unknown>;
 type ContractStatus = "draft" | "active" | "closed" | "cancelled";
+type ReceivableStatus = "open" | "partial" | "paid" | "overdue" | "cancelled";
 
 const REGION = "us-central1";
 const DEFAULT_SERVICE_TYPE = "clinic";
@@ -54,6 +56,10 @@ async function audit(uid: string | undefined, action: string, entityType: string
     metadata,
     createdAt: FieldValue.serverTimestamp(),
   });
+}
+
+function isReceivableStatus(value: unknown): value is ReceivableStatus {
+  return value === "open" || value === "partial" || value === "paid" || value === "overdue" || value === "cancelled";
 }
 
 class BatchWriter {
@@ -96,6 +102,14 @@ async function getSystemSettings() {
     bookingHorizonDays: asNumber(data.bookingHorizonDays, 90),
     indefiniteContractMonths: asNumber(data.indefiniteContractMonths, 12),
     overdueGraceDaysAfterRevert: asNumber(data.overdueGraceDaysAfterRevert, 3),
+    lateFeeEnabled: data.lateFeeEnabled === true,
+    lateFeeFixedAmount: asNumber(data.lateFeeFixedAmount),
+    lateFeePercent: asNumber(data.lateFeePercent),
+    interestEnabled: data.interestEnabled === true,
+    interestDailyPercent: asNumber(data.interestDailyPercent),
+    graceDays: asNumber(data.graceDays),
+    notificationDaysBeforeDue: Array.isArray(data.notificationDaysBeforeDue) ? data.notificationDaysBeforeDue.map((v) => asNumber(v)).filter((v) => v > 0) : [7],
+    notificationDaysAfterDue: Array.isArray(data.notificationDaysAfterDue) ? data.notificationDaysAfterDue.map((v) => asNumber(v)).filter((v) => v > 0) : [5, 15],
   };
 }
 
@@ -271,6 +285,63 @@ async function internalGenerateContractBookings(contractId: string, horizonDays?
   return { created, conflictsRegistered, cancelledOld };
 }
 
+async function cancelBookingsAndResolveConflicts(input: {
+  contractId: string;
+  cutoffDate: Date;
+  cancelReason: string;
+}) {
+  const snap = await db.collection("bookings")
+    .where("contractId", "==", input.contractId)
+    .where("startAt", ">=", Timestamp.fromDate(input.cutoffDate))
+    .get();
+  const writer = new BatchWriter();
+  const otherBookingIds = new Set<string>();
+  let cancelledBookings = 0;
+  let cancelledConflicts = 0;
+  for (const booking of snap.docs) {
+    const row = booking.data();
+    if (row.status !== "active" && row.status !== "conflict") continue;
+    await writer.update(booking.ref, {
+      status: "cancelled",
+      cancelReason: input.cancelReason,
+      cancelledAt: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+    cancelledBookings++;
+    const conflictsA = await db.collection("booking_conflicts").where("bookingIdA", "==", booking.id).get();
+    const conflictsB = await db.collection("booking_conflicts").where("bookingIdB", "==", booking.id).get();
+    for (const conflict of [...conflictsA.docs, ...conflictsB.docs]) {
+      const conflictData = conflict.data();
+      if (conflictData.status !== "pending") continue;
+      const otherId = conflictData.bookingIdA === booking.id ? asString(conflictData.bookingIdB) : asString(conflictData.bookingIdA);
+      if (otherId) otherBookingIds.add(otherId);
+      await writer.update(conflict.ref, {
+        status: "cancelled",
+        cancelReason: input.cancelReason,
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+      cancelledConflicts++;
+    }
+  }
+  await writer.flush();
+
+  const repairWriter = new BatchWriter();
+  let reactivatedBookings = 0;
+  for (const bookingId of otherBookingIds) {
+    const booking = await db.doc(`bookings/${bookingId}`).get();
+    if (!booking.exists || booking.data()?.status !== "conflict") continue;
+    const conflictsA = await db.collection("booking_conflicts").where("bookingIdA", "==", bookingId).get();
+    const conflictsB = await db.collection("booking_conflicts").where("bookingIdB", "==", bookingId).get();
+    const hasPending = [...conflictsA.docs, ...conflictsB.docs].some((doc) => doc.data().status === "pending");
+    if (!hasPending) {
+      await repairWriter.update(booking.ref, { status: "active", updatedAt: FieldValue.serverTimestamp() });
+      reactivatedBookings++;
+    }
+  }
+  await repairWriter.flush();
+  return { cancelledBookings, cancelledConflicts, reactivatedBookings };
+}
+
 export const createOrUpdateContract = onCall({ region: REGION }, async (request) => {
   await assertGestor(request.auth?.uid);
   const data = asDict(request.data);
@@ -365,6 +436,13 @@ export const closeOrCancelContract = onCall({ region: REGION }, async (request) 
   const mode = asString(data.mode) === "cancelled" ? "cancelled" : "closed";
   const reason = asString(data.reason);
   if (!contractId || !reason) throw new HttpsError("invalid-argument", "contractId e reason sao obrigatorios.");
+  const contract = await getContract(contractId);
+  const today = toDateOnly(new Date());
+  const effectiveDate = asString(data.effectiveDate, today);
+  const bookingCutoffDate = asString(data.cancellationBookingCutoff, effectiveDate);
+  const receivableCutoffMonth = startOfMonth(asString(data.cancellationReceivableCutoffMonth, effectiveDate));
+  const closeFinancialAction = asString(data.closeFinancialAction, mode === "closed" ? "cancel_unpaid" : "cancel_unpaid");
+  const penaltyAmount = asNumber(data.penaltyAmount);
 
   const receivables = await db.collection("receivables").where("contractId", "==", contractId).get();
   const hasFinancialHistory = receivables.docs.some((doc) => {
@@ -372,45 +450,128 @@ export const closeOrCancelContract = onCall({ region: REGION }, async (request) 
     return Number(row.amountPaid || 0) > 0 || row.status === "paid";
   });
   const receipts = await db.collection("receivable_receipts").where("contractId", "==", contractId).limit(1).get();
-  const futureBookings = await db.collection("bookings")
-    .where("contractId", "==", contractId)
-    .where("startAt", ">=", Timestamp.fromDate(new Date()))
-    .get();
+  const bookingResult = await cancelBookingsAndResolveConflicts({
+    contractId,
+    cutoffDate: dateAtTime(bookingCutoffDate, "00:00"),
+    cancelReason: mode,
+  });
   const writer = new BatchWriter();
   await writer.update(db.doc(`contracts/${contractId}`), {
     status: mode,
-    closedReason: reason,
-    closedAt: FieldValue.serverTimestamp(),
+    closedReason: mode === "closed" ? reason : null,
+    cancellationReason: mode === "cancelled" ? reason : null,
+    closedAt: mode === "closed" ? FieldValue.serverTimestamp() : null,
+    cancelledAt: mode === "cancelled" ? FieldValue.serverTimestamp() : null,
+    closedBy: mode === "closed" ? request.auth?.uid ?? null : null,
+    cancelledBy: mode === "cancelled" ? request.auth?.uid ?? null : null,
+    effectiveCloseDate: mode === "closed" ? effectiveDate : null,
+    cancellationEffectiveDate: mode === "cancelled" ? effectiveDate : null,
+    cancellationBookingCutoff: bookingCutoffDate,
+    cancellationReceivableCutoffMonth: receivableCutoffMonth,
+    closeFinancialAction,
+    penaltyAmount,
     updatedAt: FieldValue.serverTimestamp(),
     deletionProtected: hasFinancialHistory || !receipts.empty,
   });
-  for (const doc of futureBookings.docs) {
-    const status = doc.data().status;
-    if (status === "active" || status === "conflict") {
-      await writer.update(doc.ref, { status: "cancelled", cancelReason: mode, updatedAt: FieldValue.serverTimestamp() });
-    }
-  }
+  let cancelledReceivables = 0;
+  let lossAmount = 0;
+  let keptReceivables = 0;
   for (const doc of receivables.docs) {
     const row = doc.data();
-    if (row.status !== "paid" && Number(row.amountPaid || 0) <= 0) {
-      await writer.update(doc.ref, { status: "cancelled", cancelReason: mode, updatedAt: FieldValue.serverTimestamp() });
+    if (asString(row.referenceMonth) < receivableCutoffMonth) continue;
+    if (row.status === "paid" || Number(row.amountPaid || 0) > 0) {
+      keptReceivables++;
+      continue;
     }
+    if (closeFinancialAction === "keep_all") {
+      keptReceivables++;
+      continue;
+    }
+    await writer.update(doc.ref, {
+      status: "cancelled",
+      cancelReason: mode,
+      cancellationReason: reason,
+      lossAmount: asNumber(row.amountDue),
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+    cancelledReceivables++;
+    lossAmount += asNumber(row.amountDue);
+    await audit(request.auth?.uid, "receivable.cancel", "receivable", doc.id, {
+      contractId,
+      reason,
+      statusBefore: row.status,
+      statusAfter: "cancelled",
+      amountDue: row.amountDue,
+    });
+  }
+  let penaltyReceivableId: string | null = null;
+  if (penaltyAmount > 0) {
+    const ref = db.collection("receivables").doc(`${contractId}_penalty_${Date.now()}`);
+    penaltyReceivableId = ref.id;
+    await writer.set(ref, {
+      kind: "penalty",
+      type: "cancellation_fee",
+      description: "Multa contratual",
+      contractId,
+      bookingId: null,
+      professionalId: contract.professionalId,
+      professionalName: contract.professionalName ?? null,
+      roomId: null,
+      roomName: "Multa contratual",
+      referenceMonth: receivableCutoffMonth,
+      dueDate: effectiveDate,
+      amountDue: penaltyAmount,
+      amountPaid: 0,
+      status: effectiveDate < today ? "overdue" : "open",
+      serviceType: contract.serviceType ?? DEFAULT_SERVICE_TYPE,
+      createdAt: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
+    });
   }
   await writer.flush();
-  await audit(request.auth?.uid, "contract.soft_cancel", "contract", contractId, { mode, reason, hasFinancialHistory });
-  return { mode, hasFinancialHistory, cancelledFutureBookings: futureBookings.size };
+  await audit(request.auth?.uid, mode === "cancelled" ? "contract.cancel" : "contract.close", "contract", contractId, {
+    mode,
+    reason,
+    hasFinancialHistory,
+    effectiveDate,
+    bookingCutoffDate,
+    receivableCutoffMonth,
+    closeFinancialAction,
+    penaltyAmount,
+    penaltyReceivableId,
+    cancelledReceivables,
+    keptReceivables,
+    lossAmount,
+    ...bookingResult,
+  });
+  if (bookingResult.cancelledBookings) {
+    await audit(request.auth?.uid, "booking.cancel.future", "contract", contractId, bookingResult);
+  }
+  return {
+    mode,
+    hasFinancialHistory,
+    ...bookingResult,
+    cancelledReceivables,
+    keptReceivables,
+    lossAmount,
+    penaltyReceivableId,
+  };
 });
 
 export const applyContractValueAdjustment = onCall({ region: REGION }, async (request) => {
   await assertGestor(request.auth?.uid);
   const data = asDict(request.data);
   const contractId = asString(data.contractId);
-  const effectiveMonth = startOfMonth(asString(data.effectiveMonth));
+  const effectiveMonth = startOfMonth(asString(data.effectiveReferenceMonth, asString(data.effectiveMonth)));
   const newMonthlyValue = asNumber(data.newMonthlyValue);
-  if (!contractId || !effectiveMonth || newMonthlyValue <= 0) throw new HttpsError("invalid-argument", "Dados de reajuste invalidos.");
+  const reason = asString(data.reason);
+  if (!contractId || !effectiveMonth || newMonthlyValue <= 0 || !reason) throw new HttpsError("invalid-argument", "Dados de reajuste invalidos.");
+  const contract = await getContract(contractId);
   const snap = await db.collection("receivables").where("contractId", "==", contractId).get();
   const writer = new BatchWriter();
   let updated = 0;
+  const affectedReceivables: string[] = [];
+  const today = toDateOnly(new Date());
   for (const doc of snap.docs) {
     const row = doc.data();
     if (shouldUpdateFutureReceivable({
@@ -419,14 +580,56 @@ export const applyContractValueAdjustment = onCall({ region: REGION }, async (re
       status: row.status,
       amountPaid: asNumber(row.amountPaid),
     })) {
-      await writer.update(doc.ref, { amountDue: newMonthlyValue, updatedAt: FieldValue.serverTimestamp() });
+      const previousAmountDue = asNumber(row.amountDue);
+      const previousStatus = row.status;
+      const nextStatus = resolveReceivableStatus({
+        amountDue: newMonthlyValue,
+        amountPaid: asNumber(row.amountPaid),
+        dueDate: asString(row.dueDate),
+        today,
+        currentStatus: isReceivableStatus(row.status) ? row.status : "open",
+      });
+      await writer.update(doc.ref, {
+        amountDue: newMonthlyValue,
+        status: nextStatus,
+        adjustedAt: FieldValue.serverTimestamp(),
+        adjustmentReason: reason,
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+      await audit(request.auth?.uid, "receivable.adjust", "receivable", doc.id, {
+        contractId,
+        amountDueBefore: previousAmountDue,
+        amountDueAfter: newMonthlyValue,
+        statusBefore: previousStatus,
+        statusAfter: nextStatus,
+        reason,
+      });
+      affectedReceivables.push(doc.id);
       updated++;
     }
   }
   await writer.update(db.doc(`contracts/${contractId}`), { monthlyValue: newMonthlyValue, updatedAt: FieldValue.serverTimestamp() });
+  const adjustmentRef = db.collection("contract_adjustments").doc();
+  await writer.set(adjustmentRef, {
+    contractId,
+    previousMonthlyValue: asNumber(contract.monthlyValue),
+    newMonthlyValue,
+    effectiveReferenceMonth: effectiveMonth,
+    affectedReceivablesCount: updated,
+    affectedReceivables,
+    reason,
+    createdAt: FieldValue.serverTimestamp(),
+    createdBy: request.auth?.uid ?? null,
+  });
   await writer.flush();
-  await audit(request.auth?.uid, "contract.value_adjust", "contract", contractId, { effectiveMonth, newMonthlyValue, updated });
-  return { updated };
+  await audit(request.auth?.uid, "contract.adjustment", "contract", contractId, {
+    effectiveReferenceMonth: effectiveMonth,
+    previousMonthlyValue: asNumber(contract.monthlyValue),
+    newMonthlyValue,
+    affectedCount: updated,
+    reason,
+  });
+  return { updated, adjustmentId: adjustmentRef.id };
 });
 
 export const recordPayment = onCall({ region: REGION }, async (request) => {
@@ -434,16 +637,30 @@ export const recordPayment = onCall({ region: REGION }, async (request) => {
   const data = asDict(request.data);
   const receivableId = asString(data.receivableId);
   const paymentInput = asDict(data.paymentInput);
-  const amount = asNumber(paymentInput.amount);
-  if (!receivableId || amount <= 0) throw new HttpsError("invalid-argument", "Pagamento invalido.");
+  const baseAmount = asNumber(paymentInput.baseAmount, asNumber(paymentInput.amount));
+  const paidAt = asString(paymentInput.paidAt) || new Date().toISOString();
+  if (!receivableId || baseAmount <= 0) throw new HttpsError("invalid-argument", "Pagamento invalido.");
+  const settings = await getSystemSettings();
   const paymentRef = db.collection("receivable_payments").doc();
+  let updatedReceivable: Dict = {};
   await db.runTransaction(async (tx) => {
     const recRef = db.doc(`receivables/${receivableId}`);
     const rec = await tx.get(recRef);
     if (!rec.exists) throw new HttpsError("not-found", "Recebivel nao encontrado.");
     const row = rec.data()!;
     if (row.status === "cancelled") throw new HttpsError("failed-precondition", "Recebivel cancelado.");
-    const amountPaid = asNumber(row.amountPaid) + amount;
+    if (row.status === "paid") throw new HttpsError("failed-precondition", "Recebivel ja pago.");
+    const suggestedCharges = calculateLateCharges({
+      amountDue: asNumber(row.amountDue),
+      dueDate: asString(row.dueDate),
+      paidAt,
+      settings,
+    });
+    const lateFeeAmount = asNumber(paymentInput.lateFeeAmount, suggestedCharges.lateFeeAmount);
+    const interestAmount = asNumber(paymentInput.interestAmount, suggestedCharges.interestAmount);
+    const discountAmount = asNumber(paymentInput.discountAmount);
+    const totalPaid = Math.max(0, baseAmount + lateFeeAmount + interestAmount - discountAmount);
+    const amountPaid = asNumber(row.amountPaid) + totalPaid;
     const status = resolveReceivableStatus({
       amountDue: asNumber(row.amountDue),
       amountPaid,
@@ -451,27 +668,65 @@ export const recordPayment = onCall({ region: REGION }, async (request) => {
       today: toDateOnly(new Date()),
       currentStatus: row.status,
     });
+    const previous = {
+      amountPaid: asNumber(row.amountPaid),
+      status: isReceivableStatus(row.status) ? row.status : "open",
+    };
     tx.set(paymentRef, {
       receivableId,
       contractId: row.contractId ?? null,
+      bookingId: row.bookingId ?? null,
       professionalId: row.professionalId,
-      amount,
-      paidAt: asString(paymentInput.paidAt) || new Date().toISOString(),
-      method: asString(paymentInput.method, "PIX"),
+      amount: totalPaid,
+      baseAmount,
+      lateFeeAmount,
+      interestAmount,
+      discountAmount,
+      totalPaid,
+      suggestedLateFeeAmount: suggestedCharges.lateFeeAmount,
+      suggestedInterestAmount: suggestedCharges.interestAmount,
+      daysLate: suggestedCharges.daysLate,
+      paidAt,
+      paymentMethod: asString(paymentInput.paymentMethod, asString(paymentInput.method, "PIX")),
       notes: asString(paymentInput.notes) || null,
       status: "active",
+      receiptId: null,
       createdAt: FieldValue.serverTimestamp(),
       createdBy: request.auth?.uid ?? null,
     });
+    updatedReceivable = {
+      id: receivableId,
+      ...row,
+      amountPaid,
+      status,
+      lastPaidAt: paidAt,
+    };
     tx.update(recRef, {
       amountPaid,
       status,
-      lastPaidAt: asString(paymentInput.paidAt) || new Date().toISOString(),
+      lastPaidAt: paidAt,
+      lastPaymentId: paymentRef.id,
+      totalLateFees: asNumber(row.totalLateFees) + lateFeeAmount,
+      totalInterest: asNumber(row.totalInterest) + interestAmount,
+      totalDiscounts: asNumber(row.totalDiscounts) + discountAmount,
       updatedAt: FieldValue.serverTimestamp(),
     });
+    updatedReceivable = { ...updatedReceivable, previous };
   });
-  await audit(request.auth?.uid, "receivable.payment_record", "receivable", receivableId, { paymentId: paymentRef.id, amount });
-  return { paymentId: paymentRef.id };
+  const previous = asDict(updatedReceivable.previous);
+  await audit(request.auth?.uid, "payment.record", "receivable", receivableId, {
+    paymentId: paymentRef.id,
+    amount: asNumber(updatedReceivable.amountPaid) - asNumber(previous.amountPaid),
+    amountPaidBefore: previous.amountPaid,
+    amountPaidAfter: updatedReceivable.amountPaid,
+    statusBefore: previous.status,
+    statusAfter: updatedReceivable.status,
+  });
+  if (updatedReceivable.status === "partial") {
+    await audit(request.auth?.uid, "payment.partial", "receivable", receivableId, { paymentId: paymentRef.id });
+  }
+  delete updatedReceivable.previous;
+  return { paymentId: paymentRef.id, receivable: updatedReceivable };
 });
 
 export const revertPayment = onCall({ region: REGION }, async (request) => {
@@ -482,6 +737,8 @@ export const revertPayment = onCall({ region: REGION }, async (request) => {
   if (!paymentId || !reason) throw new HttpsError("invalid-argument", "paymentId e reason sao obrigatorios.");
   const settings = await getSystemSettings();
   let receivableId = "";
+  let updatedReceivable: Dict = {};
+  let previous: Dict = {};
   await db.runTransaction(async (tx) => {
     const paymentRef = db.doc(`receivable_payments/${paymentId}`);
     const payment = await tx.get(paymentRef);
@@ -494,46 +751,76 @@ export const revertPayment = onCall({ region: REGION }, async (request) => {
     const row = rec.data()!;
     const amountPaid = Math.max(0, asNumber(row.amountPaid) - asNumber(pay.amount));
     const today = toDateOnly(new Date());
+    const nextStatus = resolveReceivableStatus({
+      amountDue: asNumber(row.amountDue),
+      amountPaid,
+      dueDate: asString(row.dueDate),
+      today,
+      lastRevertedAt: today,
+      graceDaysAfterRevert: settings.overdueGraceDaysAfterRevert,
+    });
+    previous = {
+      amountPaid: asNumber(row.amountPaid),
+      status: row.status,
+    };
     tx.update(paymentRef, { status: "reverted", revertedAt: FieldValue.serverTimestamp(), revertReason: reason, revertedBy: request.auth?.uid ?? null });
     tx.update(recRef, {
       amountPaid,
-      status: resolveReceivableStatus({
-        amountDue: asNumber(row.amountDue),
-        amountPaid,
-        dueDate: asString(row.dueDate),
-        today,
-        lastRevertedAt: today,
-        graceDaysAfterRevert: settings.overdueGraceDaysAfterRevert,
-      }),
+      status: nextStatus,
       lastRevertedAt: today,
+      totalLateFees: Math.max(0, asNumber(row.totalLateFees) - asNumber(pay.lateFeeAmount)),
+      totalInterest: Math.max(0, asNumber(row.totalInterest) - asNumber(pay.interestAmount)),
+      totalDiscounts: Math.max(0, asNumber(row.totalDiscounts) - asNumber(pay.discountAmount)),
       updatedAt: FieldValue.serverTimestamp(),
     });
+    updatedReceivable = { id: receivableId, ...row, amountPaid, status: nextStatus, lastRevertedAt: today };
   });
-  const receipts = await db.collection("receivable_receipts").where("receivableId", "==", receivableId).where("status", "==", "issued").get();
+  const receipts = await db.collection("receivable_receipts").where("paymentId", "==", paymentId).where("status", "==", "issued").get();
   const writer = new BatchWriter();
   for (const doc of receipts.docs) {
     await writer.update(doc.ref, {
       status: "invalidated",
       invalidatedAt: FieldValue.serverTimestamp(),
       invalidationReason: reason,
+      invalidatedBy: request.auth?.uid ?? null,
       visibleInvalidation: true,
       updatedAt: FieldValue.serverTimestamp(),
     });
   }
   await writer.flush();
-  await audit(request.auth?.uid, "receivable.payment_revert", "receivable", receivableId, { paymentId, reason, invalidatedReceipts: receipts.size });
-  return { receivableId, invalidatedReceipts: receipts.size };
+  await audit(request.auth?.uid, "payment.revert", "receivable", receivableId, {
+    paymentId,
+    reason,
+    invalidatedReceipts: receipts.size,
+    amountPaidBefore: previous.amountPaid,
+    amountPaidAfter: updatedReceivable.amountPaid,
+    statusBefore: previous.status,
+    statusAfter: updatedReceivable.status,
+  });
+  if (receipts.size) {
+    await audit(request.auth?.uid, "receipt.invalidate", "payment", paymentId, { receivableId, reason, invalidatedReceipts: receipts.size });
+  }
+  return { receivableId, receivable: updatedReceivable, invalidatedReceipts: receipts.size };
 });
 
 export const issueReceipt = onCall({ region: REGION }, async (request) => {
   await assertGestor(request.auth?.uid);
-  const receivableId = asString(asDict(request.data).receivableId);
+  const data = asDict(request.data);
+  const paymentId = asString(data.paymentId);
+  if (!paymentId) throw new HttpsError("invalid-argument", "paymentId e obrigatorio.");
+  const paymentSnap = await db.doc(`receivable_payments/${paymentId}`).get();
+  if (!paymentSnap.exists || paymentSnap.data()?.status !== "active") {
+    throw new HttpsError("failed-precondition", "Pagamento ativo nao encontrado.");
+  }
+  const payment = paymentSnap.data()!;
+  if (payment.receiptId) throw new HttpsError("already-exists", "Este pagamento ja possui recibo.");
+  const receivableId = asString(payment.receivableId);
   const rec = await db.doc(`receivables/${receivableId}`).get();
   if (!rec.exists) throw new HttpsError("not-found", "Recebivel nao encontrado.");
   const row = rec.data()!;
-  if (row.status !== "paid") throw new HttpsError("failed-precondition", "Recibo so pode ser emitido para recebivel pago.");
-  const existing = await db.collection("receivable_receipts").where("receivableId", "==", receivableId).where("status", "==", "issued").limit(1).get();
-  if (!existing.empty) throw new HttpsError("already-exists", "Ja existe recibo ativo para este recebivel.");
+  const existing = await db.collection("receivable_receipts").where("paymentId", "==", paymentId).where("status", "==", "issued").limit(1).get();
+  if (!existing.empty) throw new HttpsError("already-exists", "Ja existe recibo ativo para este pagamento.");
+  const professional = await db.doc(`professionals/${asString(row.professionalId)}`).get();
   const ref = db.collection("receivable_receipts").doc();
   const receiptNumber = `REC-${new Date().toISOString().replace(/\D/g, "").slice(0, 14)}-${ref.id.slice(0, 6).toUpperCase()}`;
   const authenticationCode = createReceiptAuthenticationCode(receiptSigningSecret(), {
@@ -544,19 +831,41 @@ export const issueReceipt = onCall({ region: REGION }, async (request) => {
     professionalId: asString(row.professionalId),
     referenceMonth: asString(row.referenceMonth),
     amountDue: asNumber(row.amountDue),
-    amountPaid: asNumber(row.amountPaid),
+    amountPaid: asNumber(payment.amount),
   });
+  const remainingBalance = Math.max(0, asNumber(row.amountDue) - asNumber(row.amountPaid));
   await ref.set({
     receivableId,
+    paymentId,
     contractId: row.contractId ?? null,
+    bookingId: row.bookingId ?? null,
     professionalId: row.professionalId,
-    professionalName: row.professionalName ?? null,
+    professionalName: row.professionalName ?? professional.data()?.name ?? professional.data()?.fullName ?? null,
+    professionalSnapshot: {
+      id: row.professionalId,
+      name: row.professionalName ?? professional.data()?.name ?? professional.data()?.fullName ?? null,
+      email: professional.data()?.email ?? null,
+    },
+    clinicSnapshot: {
+      name: "Versao Saude",
+      serviceType: row.serviceType ?? DEFAULT_SERVICE_TYPE,
+    },
     roomId: row.roomId ?? null,
     roomName: row.roomName ?? null,
     referenceMonth: row.referenceMonth,
     dueDate: row.dueDate,
     amountDue: row.amountDue,
-    amountPaid: row.amountPaid,
+    amountPaid: payment.amount,
+    amountPaidAccumulated: row.amountPaid,
+    remainingBalance,
+    baseAmount: payment.baseAmount ?? payment.amount,
+    lateFeeAmount: payment.lateFeeAmount ?? 0,
+    interestAmount: payment.interestAmount ?? 0,
+    discountAmount: payment.discountAmount ?? 0,
+    paymentMethod: payment.paymentMethod ?? payment.method ?? null,
+    paidAt: payment.paidAt ?? null,
+    notes: payment.notes ?? null,
+    serviceType: row.serviceType ?? DEFAULT_SERVICE_TYPE,
     receiptNumber,
     authenticationCode,
     signatureVersion: "hmac-sha256-v1",
@@ -567,8 +876,9 @@ export const issueReceipt = onCall({ region: REGION }, async (request) => {
     createdAt: FieldValue.serverTimestamp(),
     updatedAt: FieldValue.serverTimestamp(),
   });
-  await audit(request.auth?.uid, "receivable.receipt_issue", "receivable", receivableId, { receiptId: ref.id, receiptNumber });
-  return { receiptId: ref.id, receiptNumber };
+  await paymentSnap.ref.update({ receiptId: ref.id, updatedAt: FieldValue.serverTimestamp() });
+  await audit(request.auth?.uid, "receipt.issue", "payment", paymentId, { receiptId: ref.id, receivableId, receiptNumber });
+  return { receiptId: ref.id, receiptNumber, authenticationCode };
 });
 
 export const cancelReceipt = onCall({ region: REGION }, async (request) => {
@@ -580,11 +890,12 @@ export const cancelReceipt = onCall({ region: REGION }, async (request) => {
   await db.doc(`receivable_receipts/${receiptId}`).update({
     status: "cancelled",
     cancelledAt: FieldValue.serverTimestamp(),
+    cancelledBy: request.auth?.uid ?? null,
     cancelReason: reason,
     visibleInvalidation: true,
     updatedAt: FieldValue.serverTimestamp(),
   });
-  await audit(request.auth?.uid, "receivable.receipt_cancel", "receipt", receiptId, { reason });
+  await audit(request.auth?.uid, "receipt.cancel", "receipt", receiptId, { reason });
   return { receiptId };
 });
 
@@ -622,26 +933,58 @@ export const extendOpenEndedContracts = onSchedule({ region: REGION, schedule: "
 });
 
 export const enqueueDueNotifications = onSchedule({ region: REGION, schedule: "every day 08:00", timeZone: "America/Sao_Paulo" }, async () => {
+  const settings = await getSystemSettings();
   const today = toDateOnly(new Date());
-  const targets = [addDays(today, 7), today, addDays(today, -5)];
+  const targets = [
+    ...settings.notificationDaysBeforeDue.map((days) => ({ dueDate: addDays(today, days), stage: `${days}_days_before` })),
+    { dueDate: today, stage: "due_today" },
+    ...settings.notificationDaysAfterDue.map((days) => ({ dueDate: addDays(today, -days), stage: `${days}_days_after` })),
+  ];
   const writer = new BatchWriter();
   let queued = 0;
-  for (const dueDate of targets) {
+  for (const { dueDate, stage } of targets) {
     const snap = await db.collection("receivables").where("dueDate", "==", dueDate).where("status", "in", ["open", "partial", "overdue"]).get();
     for (const doc of snap.docs) {
       const row = doc.data();
-      const ref = db.collection("notification_queue").doc(`${doc.id}_${today}`);
+      const ref = db.collection("notification_queue").doc(`${doc.id}_${stage}_${today}`);
       await writer.set(ref, {
         channel: "email",
         recipient: row.professionalEmail ?? row.professionalId,
         subject: row.dueDate === today ? "Vencimento hoje" : row.dueDate < today ? "Pagamento em atraso" : "Vencimento proximo",
         message: `Recebivel ${doc.id} vence em ${row.dueDate}.`,
+        stage,
         status: "pending",
         receivableId: doc.id,
+        contractId: row.contractId ?? null,
+        professionalId: row.professionalId ?? null,
+        dueDate: row.dueDate,
         createdAt: FieldValue.serverTimestamp(),
       }, { merge: true });
       queued++;
     }
   }
   await writer.flush();
+  await audit(undefined, "notification.enqueue", "notification_queue", null, { queued, date: today });
+});
+
+export const processNotificationQueue = onSchedule({ region: REGION, schedule: "every day 08:10", timeZone: "America/Sao_Paulo" }, async () => {
+  const settingsSnap = await db.doc("preferences/system").get();
+  const notifications = asDict(settingsSnap.data()?.notifications);
+  const realDeliveryEnabled = asDict(notifications.email).enabled === true
+    || asDict(notifications.whatsapp).enabled === true
+    || asDict(notifications.telegram).enabled === true;
+  const snap = await db.collection("notification_queue").where("status", "==", "pending").limit(200).get();
+  const writer = new BatchWriter();
+  let processed = 0;
+  for (const doc of snap.docs) {
+    await writer.update(doc.ref, {
+      status: realDeliveryEnabled ? "ready" : "logged",
+      processedAt: FieldValue.serverTimestamp(),
+      processingMode: realDeliveryEnabled ? "provider_required" : "test_logged",
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+    processed++;
+  }
+  await writer.flush();
+  await audit(undefined, "notification.process", "notification_queue", null, { processed, realDeliveryEnabled });
 });

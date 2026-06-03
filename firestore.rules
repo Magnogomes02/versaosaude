@@ -93,6 +93,11 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    match /contract_adjustments/{docId} {
+      allow read: if isGestor() || isVisualizador();
+      allow write: if false;
+    }
+
     match /notification_queue/{docId} {
       allow read: if isGestor();
       allow write: if false;

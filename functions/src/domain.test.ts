@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  calculateLateCharges,
   createReceiptAuthenticationCode,
   generateMonthlyReceivables,
   resolveReceivableStatus,
@@ -58,6 +59,12 @@ describe("financial domain", () => {
     expect(shouldUpdateFutureReceivable({
       referenceMonth: "2026-05-01",
       effectiveMonth: "2026-05-01",
+      status: "partial",
+      amountPaid: 500,
+    })).toBe(true);
+    expect(shouldUpdateFutureReceivable({
+      referenceMonth: "2026-05-01",
+      effectiveMonth: "2026-05-01",
       status: "paid",
       amountPaid: 1200,
     })).toBe(false);
@@ -79,5 +86,25 @@ describe("financial domain", () => {
     expect(createReceiptAuthenticationCode("secret-a", payload)).toBe(code);
     expect(createReceiptAuthenticationCode("secret-b", payload)).not.toBe(code);
     expect(createReceiptAuthenticationCode("secret-a", { ...payload, amountPaid: 1100 })).not.toBe(code);
+  });
+
+  it("calculates late fees and daily interest after grace days", () => {
+    expect(calculateLateCharges({
+      amountDue: 1000,
+      dueDate: "2026-06-01",
+      paidAt: "2026-06-06T10:00:00.000Z",
+      settings: {
+        lateFeeEnabled: true,
+        lateFeePercent: 2,
+        interestEnabled: true,
+        interestDailyPercent: 0.033,
+        graceDays: 3,
+      },
+    })).toEqual({
+      daysLate: 2,
+      lateFeeAmount: 20,
+      interestAmount: 0.66,
+      suggestedTotal: 1020.66,
+    });
   });
 });
