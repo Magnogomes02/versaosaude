@@ -16,7 +16,8 @@
   },
   "dependencies": {
     "firebase-admin": "^13.0.2",
-    "firebase-functions": "^6.3.2"
+    "firebase-functions": "^6.3.2",
+    "versaosaude-v2": "file:.."
   },
   "devDependencies": {
     "typescript": "^5.7.3",

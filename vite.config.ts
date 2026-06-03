@@ -4,6 +4,13 @@ import { fileURLToPath, URL } from "node:url";
 
 export default defineConfig({
   plugins: [react()],
+
+  publicDir: false,
+
+  optimizeDeps: {
+    entries: ["index.html"],
+  },
+
   build: {
     rollupOptions: {
       output: {
@@ -17,6 +24,7 @@ export default defineConfig({
       },
     },
   },
+
   resolve: {
     alias: {
       "@": fileURLToPath(new URL("./src", import.meta.url)),
