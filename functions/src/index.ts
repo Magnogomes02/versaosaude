@@ -1,6 +1,6 @@
 import * as admin from "firebase-admin";
 import { FieldValue, Timestamp } from "firebase-admin/firestore";
-import type { Query } from "firebase-admin/firestore";
+import type { DocumentData, DocumentReference, Query, SetOptions, UpdateData } from "firebase-admin/firestore";
 import { HttpsError, onCall } from "firebase-functions/v2/https";
 import { onSchedule } from "firebase-functions/v2/scheduler";
 import {
@@ -20,6 +20,7 @@ type ContractStatus = "draft" | "active" | "closed" | "cancelled";
 
 const REGION = "us-central1";
 const DEFAULT_SERVICE_TYPE = "clinic";
+const MAX_BATCH_WRITES = 450;
 
 function asDict(value: unknown): Dict {
   return value && typeof value === "object" ? value as Dict : {};
@@ -53,6 +54,39 @@ async function audit(uid: string | undefined, action: string, entityType: string
   });
 }
 
+class BatchWriter {
+  private batch = db.batch();
+  private pending = 0;
+
+  async set(ref: DocumentReference<DocumentData>, data: DocumentData, options?: SetOptions) {
+    if (options) this.batch.set(ref, data, options);
+    else this.batch.set(ref, data);
+    await this.bump();
+  }
+
+  async update(ref: DocumentReference<DocumentData>, data: UpdateData<DocumentData>) {
+    this.batch.update(ref, data);
+    await this.bump();
+  }
+
+  async delete(ref: DocumentReference<DocumentData>) {
+    this.batch.delete(ref);
+    await this.bump();
+  }
+
+  async flush() {
+    if (!this.pending) return;
+    await this.batch.commit();
+    this.batch = db.batch();
+    this.pending = 0;
+  }
+
+  private async bump() {
+    this.pending += 1;
+    if (this.pending >= MAX_BATCH_WRITES) await this.flush();
+  }
+}
+
 async function getSystemSettings() {
   const snap = await db.doc("preferences/system").get();
   const data = snap.data() ?? {};
@@ -65,9 +99,11 @@ async function getSystemSettings() {
 
 async function deleteQuery(query: Query) {
   const snap = await query.get();
-  const batch = db.batch();
-  snap.docs.forEach((doc) => batch.delete(doc.ref));
-  if (!snap.empty) await batch.commit();
+  const writer = new BatchWriter();
+  for (const doc of snap.docs) {
+    await writer.delete(doc.ref);
+  }
+  await writer.flush();
   return snap.size;
 }
 
@@ -114,12 +150,12 @@ async function internalGenerateContractReceivables(contractId: string, horizonMo
     today,
   });
   let created = 0;
-  const batch = db.batch();
+  const writer = new BatchWriter();
   for (const row of rows) {
     const ref = db.doc(`receivables/${contractId}_${row.referenceMonth}`);
     const existing = await ref.get();
     if (existing.exists) continue;
-    batch.set(ref, {
+    await writer.set(ref, {
       kind: "contract",
       contractId,
       bookingId: null,
@@ -137,7 +173,7 @@ async function internalGenerateContractReceivables(contractId: string, horizonMo
     });
     created++;
   }
-  if (created) await batch.commit();
+  await writer.flush();
   return created;
 }
 
@@ -158,22 +194,22 @@ async function internalGenerateContractBookings(contractId: string, horizonDays?
     .where("contractId", "==", contractId)
     .where("startAt", ">=", Timestamp.fromDate(new Date()))
     .get();
-  const cancelBatch = db.batch();
+  const cancelWriter = new BatchWriter();
   let cancelledOld = 0;
-  old.docs.forEach((doc) => {
+  for (const doc of old.docs) {
     const status = doc.data().status;
     if (status === "active" || status === "conflict") {
-      cancelBatch.update(doc.ref, {
+      await cancelWriter.update(doc.ref, {
         status: "cancelled",
         cancelReason: "schedule_regenerated",
         updatedAt: FieldValue.serverTimestamp(),
       });
       cancelledOld++;
     }
-  });
-  if (cancelledOld) await cancelBatch.commit();
+  }
+  await cancelWriter.flush();
 
-  const createBatch = db.batch();
+  const createWriter = new BatchWriter();
   let created = 0;
   let conflictsRegistered = 0;
   for (let day = from; day <= to; day = addDays(day, 1)) {
@@ -196,7 +232,7 @@ async function internalGenerateContractBookings(contractId: string, horizonDays?
         return otherEnd ? otherEnd > startAt : false;
       });
       const bookingRef = db.collection("bookings").doc();
-      createBatch.set(bookingRef, {
+      await createWriter.set(bookingRef, {
         contractId,
         professionalId: contract.professionalId,
         roomId,
@@ -211,19 +247,19 @@ async function internalGenerateContractBookings(contractId: string, horizonDays?
       created++;
       for (const other of overlaps) {
         const conflictRef = db.collection("booking_conflicts").doc();
-        createBatch.set(conflictRef, {
+        await createWriter.set(conflictRef, {
           bookingIdA: bookingRef.id,
           bookingIdB: other.id,
           roomId,
           status: "pending",
           createdAt: FieldValue.serverTimestamp(),
         });
-        createBatch.update(other.ref, { status: "conflict", updatedAt: FieldValue.serverTimestamp() });
+        await createWriter.update(other.ref, { status: "conflict", updatedAt: FieldValue.serverTimestamp() });
         conflictsRegistered++;
       }
     }
   }
-  if (created || conflictsRegistered) await createBatch.commit();
+  await createWriter.flush();
   return { created, conflictsRegistered, cancelledOld };
 }
 
@@ -233,30 +269,37 @@ export const createOrUpdateContract = onCall({ region: REGION }, async (request)
   const contractId = asString(data.contractId);
   const professionalId = asString(data.professionalId);
   if (!professionalId) throw new HttpsError("invalid-argument", "professionalId e obrigatorio.");
+  const ref = contractId ? db.doc(`contracts/${contractId}`) : db.collection("contracts").doc();
+  const existing = contractId ? await ref.get() : null;
+  if (contractId && !existing?.exists) throw new HttpsError("not-found", "Contrato nao encontrado.");
+
   const professional = await db.doc(`professionals/${professionalId}`).get();
   const professionalName = asString(professional.data()?.name) || asString(professional.data()?.fullName);
+  const professionalEmail = asString(professional.data()?.email) || null;
+  const existingStatus = asString(existing?.data()?.status, "draft") as ContractStatus;
+  const status = contractId ? existingStatus : "draft";
   const payload = {
     professionalId,
     professionalName,
+    professionalEmail,
     startDate: asString(data.startDate),
     endDate: asString(data.endDate) || null,
     monthlyValue: asNumber(data.monthlyValue),
     dueDay: Math.min(28, Math.max(1, asNumber(data.dueDay, 5))),
-    status: asString(data.status, "draft") as ContractStatus,
+    status,
     serviceType: asString(data.serviceType, DEFAULT_SERVICE_TYPE),
     notes: asString(data.notes) || null,
     updatedAt: FieldValue.serverTimestamp(),
   };
-  const ref = contractId ? db.doc(`contracts/${contractId}`) : db.collection("contracts").doc();
   if (contractId) await ref.set(payload, { merge: true });
   else await ref.set({ ...payload, createdAt: FieldValue.serverTimestamp() });
 
   await deleteQuery(db.collection("contract_schedules").where("contractId", "==", ref.id));
   const schedules = Array.isArray(data.schedules) ? data.schedules.map(asDict) : [];
-  const batch = db.batch();
-  schedules.forEach((schedule) => {
+  const scheduleWriter = new BatchWriter();
+  for (const schedule of schedules) {
     const scheduleRef = db.collection("contract_schedules").doc();
-    batch.set(scheduleRef, {
+    await scheduleWriter.set(scheduleRef, {
       contractId: ref.id,
       weekday: asNumber(schedule.weekday),
       roomId: asString(schedule.roomId),
@@ -265,10 +308,17 @@ export const createOrUpdateContract = onCall({ region: REGION }, async (request)
       serviceType: asString(data.serviceType, DEFAULT_SERVICE_TYPE),
       createdAt: FieldValue.serverTimestamp(),
     });
+  }
+  await scheduleWriter.flush();
+  const regeneratedBookings = status === "active"
+    ? await internalGenerateContractBookings(ref.id)
+    : null;
+  await audit(request.auth?.uid, contractId ? "contract.update" : "contract.create", "contract", ref.id, {
+    schedules: schedules.length,
+    status,
+    regeneratedBookings,
   });
-  if (schedules.length) await batch.commit();
-  await audit(request.auth?.uid, contractId ? "contract.update" : "contract.create", "contract", ref.id, { schedules: schedules.length });
-  return { contractId: ref.id };
+  return { contractId: ref.id, regeneratedBookings };
 });
 
 export const activateContract = onCall({ region: REGION }, async (request) => {
@@ -318,27 +368,27 @@ export const closeOrCancelContract = onCall({ region: REGION }, async (request) 
     .where("contractId", "==", contractId)
     .where("startAt", ">=", Timestamp.fromDate(new Date()))
     .get();
-  const batch = db.batch();
-  batch.update(db.doc(`contracts/${contractId}`), {
+  const writer = new BatchWriter();
+  await writer.update(db.doc(`contracts/${contractId}`), {
     status: mode,
     closedReason: reason,
     closedAt: FieldValue.serverTimestamp(),
     updatedAt: FieldValue.serverTimestamp(),
     deletionProtected: hasFinancialHistory || !receipts.empty,
   });
-  futureBookings.docs.forEach((doc) => {
+  for (const doc of futureBookings.docs) {
     const status = doc.data().status;
     if (status === "active" || status === "conflict") {
-      batch.update(doc.ref, { status: "cancelled", cancelReason: mode, updatedAt: FieldValue.serverTimestamp() });
+      await writer.update(doc.ref, { status: "cancelled", cancelReason: mode, updatedAt: FieldValue.serverTimestamp() });
     }
-  });
-  receivables.docs.forEach((doc) => {
+  }
+  for (const doc of receivables.docs) {
     const row = doc.data();
     if (row.status !== "paid" && Number(row.amountPaid || 0) <= 0) {
-      batch.update(doc.ref, { status: "cancelled", cancelReason: mode, updatedAt: FieldValue.serverTimestamp() });
+      await writer.update(doc.ref, { status: "cancelled", cancelReason: mode, updatedAt: FieldValue.serverTimestamp() });
     }
-  });
-  await batch.commit();
+  }
+  await writer.flush();
   await audit(request.auth?.uid, "contract.soft_cancel", "contract", contractId, { mode, reason, hasFinancialHistory });
   return { mode, hasFinancialHistory, cancelledFutureBookings: futureBookings.size };
 });
@@ -351,9 +401,9 @@ export const applyContractValueAdjustment = onCall({ region: REGION }, async (re
   const newMonthlyValue = asNumber(data.newMonthlyValue);
   if (!contractId || !effectiveMonth || newMonthlyValue <= 0) throw new HttpsError("invalid-argument", "Dados de reajuste invalidos.");
   const snap = await db.collection("receivables").where("contractId", "==", contractId).get();
-  const batch = db.batch();
+  const writer = new BatchWriter();
   let updated = 0;
-  snap.docs.forEach((doc) => {
+  for (const doc of snap.docs) {
     const row = doc.data();
     if (shouldUpdateFutureReceivable({
       referenceMonth: asString(row.referenceMonth),
@@ -361,12 +411,12 @@ export const applyContractValueAdjustment = onCall({ region: REGION }, async (re
       status: row.status,
       amountPaid: asNumber(row.amountPaid),
     })) {
-      batch.update(doc.ref, { amountDue: newMonthlyValue, updatedAt: FieldValue.serverTimestamp() });
+      await writer.update(doc.ref, { amountDue: newMonthlyValue, updatedAt: FieldValue.serverTimestamp() });
       updated++;
     }
-  });
-  batch.update(db.doc(`contracts/${contractId}`), { monthlyValue: newMonthlyValue, updatedAt: FieldValue.serverTimestamp() });
-  await batch.commit();
+  }
+  await writer.update(db.doc(`contracts/${contractId}`), { monthlyValue: newMonthlyValue, updatedAt: FieldValue.serverTimestamp() });
+  await writer.flush();
   await audit(request.auth?.uid, "contract.value_adjust", "contract", contractId, { effectiveMonth, newMonthlyValue, updated });
   return { updated };
 });
@@ -452,15 +502,17 @@ export const revertPayment = onCall({ region: REGION }, async (request) => {
     });
   });
   const receipts = await db.collection("receivable_receipts").where("receivableId", "==", receivableId).where("status", "==", "issued").get();
-  const batch = db.batch();
-  receipts.docs.forEach((doc) => batch.update(doc.ref, {
-    status: "invalidated",
-    invalidatedAt: FieldValue.serverTimestamp(),
-    invalidationReason: reason,
-    visibleInvalidation: true,
-    updatedAt: FieldValue.serverTimestamp(),
-  }));
-  if (!receipts.empty) await batch.commit();
+  const writer = new BatchWriter();
+  for (const doc of receipts.docs) {
+    await writer.update(doc.ref, {
+      status: "invalidated",
+      invalidatedAt: FieldValue.serverTimestamp(),
+      invalidationReason: reason,
+      visibleInvalidation: true,
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+  }
+  await writer.flush();
   await audit(request.auth?.uid, "receivable.payment_revert", "receivable", receivableId, { paymentId, reason, invalidatedReceipts: receipts.size });
   return { receivableId, invalidatedReceipts: receipts.size };
 });
@@ -521,9 +573,9 @@ export const markOverdueReceivables = onSchedule({ region: REGION, schedule: "ev
   const settings = await getSystemSettings();
   const today = toDateOnly(new Date());
   const snap = await db.collection("receivables").where("status", "in", ["open", "partial"]).get();
-  const batch = db.batch();
+  const writer = new BatchWriter();
   let updated = 0;
-  snap.docs.forEach((doc) => {
+  for (const doc of snap.docs) {
     const row = doc.data();
     const status = resolveReceivableStatus({
       amountDue: asNumber(row.amountDue),
@@ -535,11 +587,11 @@ export const markOverdueReceivables = onSchedule({ region: REGION, schedule: "ev
       graceDaysAfterRevert: settings.overdueGraceDaysAfterRevert,
     });
     if (status !== row.status) {
-      batch.update(doc.ref, { status, updatedAt: FieldValue.serverTimestamp() });
+      await writer.update(doc.ref, { status, updatedAt: FieldValue.serverTimestamp() });
       updated++;
     }
-  });
-  if (updated) await batch.commit();
+  }
+  await writer.flush();
 });
 
 export const extendOpenEndedContracts = onSchedule({ region: REGION, schedule: "every month 1st 03:00", timeZone: "America/Sao_Paulo" }, async () => {
@@ -553,14 +605,14 @@ export const extendOpenEndedContracts = onSchedule({ region: REGION, schedule: "
 export const enqueueDueNotifications = onSchedule({ region: REGION, schedule: "every day 08:00", timeZone: "America/Sao_Paulo" }, async () => {
   const today = toDateOnly(new Date());
   const targets = [addDays(today, 7), today, addDays(today, -5)];
-  const batch = db.batch();
+  const writer = new BatchWriter();
   let queued = 0;
   for (const dueDate of targets) {
     const snap = await db.collection("receivables").where("dueDate", "==", dueDate).where("status", "in", ["open", "partial", "overdue"]).get();
-    snap.docs.forEach((doc) => {
+    for (const doc of snap.docs) {
       const row = doc.data();
       const ref = db.collection("notification_queue").doc(`${doc.id}_${today}`);
-      batch.set(ref, {
+      await writer.set(ref, {
         channel: "email",
         recipient: row.professionalEmail ?? row.professionalId,
         subject: row.dueDate === today ? "Vencimento hoje" : row.dueDate < today ? "Pagamento em atraso" : "Vencimento proximo",
@@ -570,7 +622,7 @@ export const enqueueDueNotifications = onSchedule({ region: REGION, schedule: "e
         createdAt: FieldValue.serverTimestamp(),
       }, { merge: true });
       queued++;
-    });
+    }
   }
-  if (queued) await batch.commit();
+  await writer.flush();
 });

@@ -4,8 +4,6 @@ import {
   callActivateContract,
   callCloseOrCancelContract,
   callCreateOrUpdateContract,
-  callGenerateContractBookings,
-  callGenerateContractReceivables,
   listContracts,
   listProfessionals,
   listRooms,
@@ -61,9 +59,9 @@ export function ContractsPage() {
   }
 
   async function activate(contractId: string) {
-    await callActivateContract({ contractId });
-    await callGenerateContractReceivables({ contractId, horizonMonths: 12 });
-    await callGenerateContractBookings({ contractId, horizonDays: 90 });
+    const result = await callActivateContract({ contractId });
+    const data = result.data as { receivablesCreated?: number; created?: number; conflictsRegistered?: number };
+    setMessage(`Contrato ativado: ${data.receivablesCreated ?? 0} recebiveis e ${data.created ?? 0} reservas geradas.`);
     refresh();
   }
 

@@ -86,6 +86,12 @@ Colecoes adicionadas: `contract_schedules`, `booking_conflicts`, `receivables`, 
 - Estornos invalidam recibos emitidos e aplicam periodo de graca antes de marcar atraso novamente.
 - Cancelamento/encerramento de contrato usa soft cancel e preserva recebiveis/recibos com historico financeiro.
 
+## Agenda e expansao
+
+- `activateContract` ja gera recebiveis e reservas iniciais; o frontend nao chama geracao duplicada depois da ativacao.
+- `createOrUpdateContract` preserva o status atual do contrato e, quando o contrato ja esta ativo, regenera reservas futuras ao alterar a grade.
+- Escritas em massa de reservas, recebiveis, notificacoes e cancelamentos usam commits em blocos para evitar o limite de 500 operacoes por batch do Firestore.
+
 ## Observacoes
 
 - O deploy de Functions esta configurado para Node.js 22. A maquina local pode exibir aviso se estiver usando Node 20, mas o build TypeScript continua valido.
