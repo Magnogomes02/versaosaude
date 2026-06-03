@@ -2,7 +2,7 @@ import { cert, getApps, initializeApp } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
 import { FieldValue, getFirestore } from "firebase-admin/firestore";
 
-const DEFAULT_OWNER_EMAIL = "magno.gomes.santiago@gmail.com";
+const DEFAULT_OWNER_EMAIL = "magno.gomes02@gmail.com";
 
 function parseArgs() {
   const args = {};
@@ -38,17 +38,16 @@ async function main() {
     : await auth.getUserByEmail(email);
 
   const previousOwners = await firestore.collection("user_roles").where("role", "==", "owner").get();
+  const previousOwnerDocs = previousOwners.docs.filter((doc) => doc.id !== user.uid);
   const batch = firestore.batch();
-  previousOwners.docs
-    .filter((doc) => doc.id !== user.uid)
-    .forEach((doc) => {
-      batch.set(doc.ref, {
-        role: "gestor",
-        previousRole: "owner",
-        ownerRevokedAt: FieldValue.serverTimestamp(),
-        updatedAt: FieldValue.serverTimestamp(),
-      }, { merge: true });
-    });
+  previousOwnerDocs.forEach((doc) => {
+    batch.set(doc.ref, {
+      role: "gestor",
+      previousRole: "owner",
+      ownerRevokedAt: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
+    }, { merge: true });
+  });
 
   batch.set(firestore.doc(`profiles/${user.uid}`), {
     email: user.email ?? email,
@@ -64,10 +63,19 @@ async function main() {
   }, { merge: true });
 
   await batch.commit();
+
+  for (const previousOwner of previousOwnerDocs) {
+    try {
+      await auth.setCustomUserClaims(previousOwner.id, { role: "gestor", owner: false, gestor: true });
+    } catch (error) {
+      console.warn(`Nao foi possivel atualizar claims do owner anterior ${previousOwner.id}:`, error instanceof Error ? error.message : error);
+    }
+  }
+
   await auth.setCustomUserClaims(user.uid, { role: "owner", owner: true, gestor: true });
 
   console.log(`Owner configurado: ${user.uid} (${user.email ?? email})`);
-  console.log(`Owners anteriores rebaixados para gestor: ${previousOwners.docs.filter((doc) => doc.id !== user.uid).length}`);
+  console.log(`Owners anteriores rebaixados para gestor: ${previousOwnerDocs.length}`);
 }
 
 main().catch((error) => {
