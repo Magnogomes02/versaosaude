@@ -32,7 +32,7 @@ firebase deploy
 
 As regras da V2 exigem `user_roles/{uid}.role = "owner"` ou `gestor` para operacoes administrativas. O `owner` e o administrador master unico do projeto, mas a interface o trata como gestor para nao expor diferenca visual.
 
-Depois de criar o usuario `magno.gomes.santiago@gmail.com` no Firebase Auth, promova-o a owner com Admin SDK:
+Depois de criar o usuario `magno.gomes02@gmail.com` no Firebase Auth, promova-o a owner com Admin SDK:
 
 ```bash
 cd functions
